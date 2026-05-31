@@ -148,4 +148,39 @@ mod tests {
         assert_ne!(base, cache_key("fp", "mer", "natural", None, r#"{"orientation":"landscape"}"#, 50, None));
         assert_ne!(base, cache_key("fp", "mer", "natural", None, "{}", 10, None));
     }
+
+    fn empty_response() -> SearchResponse {
+        SearchResponse {
+            results: vec![],
+            interpreted_query: crate::understanding::InterpretedQuery {
+                semantic_text: String::new(),
+                filters: Default::default(),
+                confidence: 0.0,
+                editable: true,
+            },
+            facets: Default::default(),
+            next_cursor: None,
+            query_hash: "0".into(),
+            degraded: false,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invalidate_purges_only_target_tenant() {
+        let (t1, t2) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let cache = InMemoryTtlCache::new(Duration::from_secs(60));
+        cache.put("k1".into(), t1, empty_response()).await;
+        cache.put("k2".into(), t2, empty_response()).await;
+        cache.invalidate_tenant(t1).await;
+        // Le tenant ingéré est purgé ; l'autre périmètre reste servi.
+        assert!(cache.get("k1").await.is_none(), "le tenant purgé devient un miss");
+        assert!(cache.get("k2").await.is_some(), "les autres tenants sont préservés");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expired_entry_is_a_miss() {
+        let cache = InMemoryTtlCache::new(Duration::from_millis(0)); // expire immédiatement
+        cache.put("k".into(), Uuid::nil(), empty_response()).await;
+        assert!(cache.get("k").await.is_none(), "entrée expirée → miss (purge paresseuse)");
+    }
 }

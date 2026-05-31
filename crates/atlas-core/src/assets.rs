@@ -16,6 +16,8 @@ pub struct AssetsState {
     pub db: atlas_db::Db,
     pub embedder: Arc<dyn Embedder>,
     pub hub: atlas_realtime::Hub,
+    /// Cache de recherche partagé : purgé pour le tenant à chaque ingestion (doc 25 §6).
+    pub cache: Arc<dyn atlas_search::cache::SearchCache>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +75,10 @@ async fn create_asset(
         .upsert_embedding(tenant, id, "fake", &prepared.embedding)
         .await
         .map_err(internal)?;
+
+    // Le périmètre du tenant a changé : on purge son cache de recherche pour éviter de servir
+    // des résultats périmés qui ignoreraient l'asset fraîchement indexé (doc 25 §6).
+    st.cache.invalidate_tenant(tenant).await;
 
     // Temps réel : notifie les UI abonnées (canaux "ingest" et "asset:{id}"), doc 40.
     let payload = json!({ "id": id, "status": prepared.status, "title": req.title });

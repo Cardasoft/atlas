@@ -67,6 +67,10 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
     // Sélection des index + routes d'ingestion selon la disponibilité de PostgreSQL.
     let (search_state, ingest_routes): (atlas_search::SearchState, Option<Router>) = match &db {
         Some(db) => {
+            // Cache de résultats cohérent avec les droits (doc 25 §6), TTL court en mémoire.
+            // Partagé entre recherche (lecture) et ingestion (purge du tenant) → même instance.
+            let cache: Arc<dyn atlas_search::cache::SearchCache> =
+                Arc::new(atlas_search::cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
             let search_state = atlas_search::SearchState {
                 vector: Arc::new(atlas_db::search_pg::PgVectorIndex {
                     db: db.clone(),
@@ -78,15 +82,13 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 logger: Arc::new(atlas_db::search_pg::PgSearchLog { db: db.clone() }),
                 popularity: Arc::new(atlas_db::search_pg::PgPopularity { db: db.clone() }),
                 weights: Arc::new(atlas_db::search_pg::PgWeights { db: db.clone() }),
-                // Cache de résultats cohérent avec les droits (doc 25 §6), TTL court en mémoire.
-                cache: Arc::new(atlas_search::cache::InMemoryTtlCache::new(
-                    std::time::Duration::from_secs(60),
-                )),
+                cache: cache.clone(),
             };
             let ingest = assets::routes(assets::AssetsState {
                 db: db.clone(),
                 embedder: embedder.clone(),
                 hub: hub.clone(),
+                cache,
             })
             // Recherches enregistrées : disponibles avec la DB (doc 25 §3.2).
             .merge(searches::routes(searches::SearchesState { db: db.clone() }))
