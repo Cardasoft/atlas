@@ -8,7 +8,12 @@ pub mod rrf;
 pub mod understanding;
 
 use async_trait::async_trait;
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::{FromRequestParts, State},
+    http::request::Parts,
+    routing::post,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -25,10 +30,42 @@ fn query_hash(query: &str) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// Contexte d'autorisation (doc 38). M1 : porte au minimum le tenant.
-#[derive(Debug, Clone)]
+/// Contexte d'autorisation (doc 38). M1 : tenant + utilisateur résolus depuis la requête
+/// (stand-in du jeton OIDC à venir). `Default` = tenant nil, aucun utilisateur.
+#[derive(Debug, Clone, Default)]
 pub struct AuthCtx {
     pub tenant_id: Uuid,
+    /// Utilisateur résolu (propriétaire des recherches enregistrées, auteur du journal).
+    /// `None` tant qu'aucune identité n'est fournie (dev/air-gap mono-utilisateur).
+    pub user_id: Option<Uuid>,
+}
+
+/// Résout l'identité depuis les en-têtes (stand-in M1 du jeton, doc 38 §5). Fonction **pure**
+/// testée sans HTTP : tenant absent/illisible → nil (mono-tenant dev) ; utilisateur idem → None.
+/// Sera remplacée par la vérification OIDC/clé d'API en conservant cette signature.
+pub fn resolve_auth(tenant_hdr: Option<&str>, user_hdr: Option<&str>) -> AuthCtx {
+    AuthCtx {
+        tenant_id: tenant_hdr.and_then(|s| Uuid::parse_str(s).ok()).unwrap_or_else(Uuid::nil),
+        user_id: user_hdr.and_then(|s| Uuid::parse_str(s).ok()),
+    }
+}
+
+/// Nom des en-têtes portant l'identité M1 (remplacés par le jeton à terme).
+const HDR_TENANT: &str = "x-atlas-tenant";
+const HDR_USER: &str = "x-atlas-user";
+
+/// Extracteur axum : résout `AuthCtx` depuis les en-têtes de la requête. Jamais en échec
+/// (défauts mono-tenant) ; l'autorisation fine reste portée par la RLS (défense en profondeur).
+#[derive(Debug, Clone)]
+pub struct Identity(pub AuthCtx);
+
+#[async_trait]
+impl<S: Send + Sync> FromRequestParts<S> for Identity {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let hdr = |name: &str| parts.headers.get(name).and_then(|v| v.to_str().ok());
+        Ok(Identity(resolve_auth(hdr(HDR_TENANT), hdr(HDR_USER))))
+    }
 }
 
 /// Une voie de récupération renvoie des hits classés (doc 25 §4.3).
@@ -182,19 +219,23 @@ pub struct SearchResponse {
 /// Routeur du domaine recherche, monté sous `/v1` par le service core.
 pub fn routes(state: SearchState) -> Router {
     Router::new()
-        .route("/search", post(search_handler))
+        .route("/search", post(search_endpoint))
         .with_state(state)
 }
 
-/// Pipeline (doc 25 §4) : understanding → filtres éditables → retrieval (parallèle selon
-/// le mode) → fusion RRF → pagination par curseur.
-async fn search_handler(
+/// Handler axum `/v1/search` : résout l'identité (en-têtes, doc 38) puis exécute le pipeline.
+async fn search_endpoint(
     State(st): State<SearchState>,
+    Identity(ctx): Identity,
     Json(req): Json<SearchRequest>,
 ) -> Json<SearchResponse> {
+    Json(run_search(st, req, ctx).await)
+}
+
+/// Pipeline (doc 25 §4) : understanding → filtres éditables → retrieval (parallèle selon
+/// le mode) → fusion RRF → pagination par curseur. L'identité (`ctx`) borne tout accès (RLS).
+async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> SearchResponse {
     let started = Instant::now();
-    // M1 : tenant fixe (sera résolu depuis le jeton, doc 38).
-    let ctx = AuthCtx { tenant_id: Uuid::nil() };
     let mut iq = interpret(&req.query);
     // Filtres explicites du client → priment sur les filtres déduits (§4.1).
     if let Some(over) = req.filters.clone() {
@@ -266,13 +307,23 @@ async fn search_handler(
         )
         .await;
 
-    Json(SearchResponse {
+    SearchResponse {
         results,
         interpreted_query: iq,
         facets,
         next_cursor: next.map(|c| c.encode()),
         degraded,
-    })
+    }
+}
+
+/// Shim de test : exécute le pipeline avec une identité par défaut (tenant nil, mono-utilisateur),
+/// en conservant la forme `(State, Json) -> Json` historique des tests du handler.
+#[cfg(test)]
+async fn search_handler(
+    State(st): State<SearchState>,
+    Json(req): Json<SearchRequest>,
+) -> Json<SearchResponse> {
+    Json(run_search(st, req, AuthCtx::default()).await)
 }
 
 // --- Stub en mémoire (tests/dev ; remplacé par pgvector + FTS quand PG est branché) ---
@@ -552,6 +603,27 @@ mod tests {
     fn query_hash_is_stable_and_normalized() {
         assert_eq!(query_hash("Plage "), query_hash("plage"));
         assert_ne!(query_hash("plage"), query_hash("montagne"));
+    }
+
+    #[test]
+    fn resolve_auth_parses_valid_headers() {
+        let t = Uuid::from_u128(42);
+        let u = Uuid::from_u128(7);
+        let ctx = resolve_auth(Some(&t.to_string()), Some(&u.to_string()));
+        assert_eq!(ctx.tenant_id, t);
+        assert_eq!(ctx.user_id, Some(u));
+    }
+
+    #[test]
+    fn resolve_auth_defaults_when_absent_or_invalid() {
+        // Absents → tenant nil, utilisateur None.
+        let ctx = resolve_auth(None, None);
+        assert_eq!(ctx.tenant_id, Uuid::nil());
+        assert_eq!(ctx.user_id, None);
+        // Illisibles → mêmes défauts (jamais d'échec, RLS reste la garde).
+        let ctx = resolve_auth(Some("pas-un-uuid"), Some("non-plus"));
+        assert_eq!(ctx.tenant_id, Uuid::nil());
+        assert_eq!(ctx.user_id, None);
     }
 
     #[tokio::test(flavor = "current_thread")]

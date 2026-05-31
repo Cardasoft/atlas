@@ -172,7 +172,7 @@ impl SearchLogger for PgSearchLog {
             .db
             .insert_search_log(
                 ctx.tenant_id,
-                None, // user_id résolu depuis le jeton à terme (doc 38)
+                ctx.user_id, // résolu depuis l'identité de la requête (doc 38)
                 &entry.query_hash,
                 &entry.interpreted_json,
                 entry.result_count as i32,

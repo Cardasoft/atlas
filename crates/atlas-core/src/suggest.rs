@@ -2,6 +2,7 @@
 //! Disponible uniquement si PostgreSQL est branché. M1 : suggestions issues des titres
 //! d'assets par préfixe, bornées par la RLS. Tenant fixe (résolu depuis le jeton, doc 38).
 
+use atlas_search::Identity;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -10,7 +11,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct SuggestState {
@@ -43,10 +43,9 @@ pub fn routes(state: SuggestState) -> Router {
         .with_state(state)
 }
 
-const TENANT: Uuid = Uuid::nil();
-
 async fn suggest(
     State(st): State<SuggestState>,
+    Identity(ctx): Identity,
     Query(q): Query<SuggestQuery>,
 ) -> Result<Json<Suggestions>, (StatusCode, Json<Value>)> {
     let prefix = q.q.trim();
@@ -57,7 +56,7 @@ async fn suggest(
     let limit = q.limit.clamp(1, MAX_LIMIT);
     let suggestions = st
         .db
-        .suggest_titles(TENANT, prefix, limit)
+        .suggest_titles(ctx.tenant_id, prefix, limit)
         .await
         .map_err(internal)?;
     Ok(Json(Suggestions { suggestions }))

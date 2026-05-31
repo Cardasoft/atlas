@@ -4,6 +4,7 @@
 
 use atlas_embed::Embedder;
 use atlas_ingest::prepare::{prepare, IngestInput};
+use atlas_search::Identity;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -45,10 +46,10 @@ pub fn routes(state: AssetsState) -> Router {
 
 async fn create_asset(
     State(st): State<AssetsState>,
+    Identity(ctx): Identity,
     Json(req): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<CreateAssetResponse>), (StatusCode, Json<Value>)> {
-    // M1 : tenant fixe (résolu depuis le jeton à terme, doc 38).
-    let tenant = Uuid::nil();
+    let tenant = ctx.tenant_id;
 
     let input = IngestInput {
         title: &req.title,

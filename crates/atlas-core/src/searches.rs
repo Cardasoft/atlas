@@ -3,6 +3,7 @@
 //! Disponibles uniquement si PostgreSQL est branché. Le payload `query` est un objet JSON
 //! libre (typiquement un corps `/v1/search`) conservé tel quel pour rejeu/édition.
 
+use atlas_search::{AuthCtx, Identity};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -43,18 +44,20 @@ pub fn routes(state: SearchesState) -> Router {
         .with_state(state)
 }
 
-/// M1 : tenant/owner fixes (résolus depuis le jeton à terme, doc 38).
-const TENANT: Uuid = Uuid::nil();
-const OWNER: Uuid = Uuid::nil();
+/// Propriétaire effectif : l'utilisateur résolu, ou nil en mono-utilisateur (dev, doc 38).
+fn owner_of(ctx: &AuthCtx) -> Uuid {
+    ctx.user_id.unwrap_or_else(Uuid::nil)
+}
 
 async fn create(
     State(st): State<SearchesState>,
+    Identity(ctx): Identity,
     Json(req): Json<CreateSavedSearchRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let query_json = req.query.to_string();
     let id = st
         .db
-        .create_saved_search(TENANT, OWNER, &req.name, &query_json, req.notify)
+        .create_saved_search(ctx.tenant_id, owner_of(&ctx), &req.name, &query_json, req.notify)
         .await
         .map_err(internal)?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
@@ -62,8 +65,13 @@ async fn create(
 
 async fn list(
     State(st): State<SearchesState>,
+    Identity(ctx): Identity,
 ) -> Result<Json<Vec<SavedSearchView>>, (StatusCode, Json<Value>)> {
-    let rows = st.db.list_saved_searches(TENANT, OWNER).await.map_err(internal)?;
+    let rows = st
+        .db
+        .list_saved_searches(ctx.tenant_id, owner_of(&ctx))
+        .await
+        .map_err(internal)?;
     let out = rows
         .into_iter()
         .map(|s| SavedSearchView {
@@ -80,9 +88,14 @@ async fn list(
 
 async fn delete(
     State(st): State<SearchesState>,
+    Identity(ctx): Identity,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let deleted = st.db.delete_saved_search(TENANT, OWNER, id).await.map_err(internal)?;
+    let deleted = st
+        .db
+        .delete_saved_search(ctx.tenant_id, owner_of(&ctx), id)
+        .await
+        .map_err(internal)?;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {

@@ -3,6 +3,7 @@
 //! Disponibles uniquement si PostgreSQL est branché. Pilote quelles facettes la recherche
 //! calcule pour le périmètre. M1 : tenant fixe (résolu depuis le jeton à terme, doc 38).
 
+use atlas_search::Identity;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -11,7 +12,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct FacetConfigState {
@@ -41,13 +41,12 @@ pub fn routes(state: FacetConfigState) -> Router {
         .with_state(state)
 }
 
-const TENANT: Uuid = Uuid::nil();
-
 async fn get_config(
     State(st): State<FacetConfigState>,
+    Identity(ctx): Identity,
     Query(q): Query<ScopeQuery>,
 ) -> Result<Json<FacetConfig>, (StatusCode, Json<Value>)> {
-    let raw = st.db.get_facet_config(TENANT, &q.scope).await.map_err(internal)?;
+    let raw = st.db.get_facet_config(ctx.tenant_id, &q.scope).await.map_err(internal)?;
     // Texte JSON issu de jsonb → tableau valide ; défaut [] si non configuré.
     let facets = raw
         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
@@ -57,6 +56,7 @@ async fn get_config(
 
 async fn put_config(
     State(st): State<FacetConfigState>,
+    Identity(ctx): Identity,
     Json(cfg): Json<FacetConfig>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     let facets_json = serde_json::to_string(&cfg.facets).map_err(|e| {
@@ -70,7 +70,7 @@ async fn put_config(
         )
     })?;
     st.db
-        .put_facet_config(TENANT, &cfg.scope, &facets_json)
+        .put_facet_config(ctx.tenant_id, &cfg.scope, &facets_json)
         .await
         .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
