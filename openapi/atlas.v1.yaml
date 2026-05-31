@@ -127,12 +127,24 @@ components:
         id: { type: string, format: uuid }
         status: { $ref: "#/components/schemas/AssetStatus" }
         content_sha256: { type: string }
+    StructuredFilter:
+      type: object
+      description: "Filtres structurés (déduits ou explicites, doc 25 §4.1)"
+      properties:
+        has_people: { type: boolean, nullable: true }
+        orientation: { type: string, nullable: true }
+        rights_status: { $ref: "#/components/schemas/RightsStatus" }
+        type: { type: array, items: { type: string } }
     SearchRequest:
       type: object
       required: [query]
       properties:
         query: { type: string }
-        mode: { type: string, enum: [natural, lexical, example], default: natural }
+        mode: { type: string, enum: [natural, lexical], default: natural }
+        filters:
+          allOf: [ { $ref: "#/components/schemas/StructuredFilter" } ]
+          nullable: true
+          description: "Filtres explicites ; priment sur les filtres déduits (interpreted_query éditable)"
         page_size: { type: integer, default: 50, maximum: 200 }
         cursor: { type: string, nullable: true }
     SearchResultItem:
@@ -142,12 +154,21 @@ components:
         score: { type: number }
         title: { type: string }
         rights_status: { $ref: "#/components/schemas/RightsStatus" }
+    InterpretedQuery:
+      type: object
+      description: "Requête interprétée, renvoyée au client et éditable (doc 25 §4.1)"
+      properties:
+        semantic_text: { type: string }
+        filters: { $ref: "#/components/schemas/StructuredFilter" }
+        confidence: { type: number }
+        editable: { type: boolean }
     SearchResponse:
       type: object
       properties:
         results:
           type: array
           items: { $ref: "#/components/schemas/SearchResultItem" }
+        interpreted_query: { $ref: "#/components/schemas/InterpretedQuery" }
         next_cursor: { type: string, nullable: true }
         degraded: { type: boolean }
     Problem:
