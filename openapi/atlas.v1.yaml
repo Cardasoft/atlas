@@ -124,6 +124,31 @@ paths:
       responses:
         "204": { description: Clic pris en compte (ou ignoré si orphelin) }
         "500": { $ref: "#/components/responses/Problem" }
+  /search/weights:
+    get:
+      tags: [search]
+      operationId: getSearchWeights
+      summary: Pondérations RRF du tenant (doc 25 §4.4/§9)
+      description: "Défauts neutres (semantic=1, lexical=1, popularity=0) si non configuré."
+      responses:
+        "200":
+          description: Pondérations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchWeights" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [search]
+      operationId: putSearchWeights
+      summary: Configurer les pondérations RRF du tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchWeights" }
+      responses:
+        "204": { description: Pondérations enregistrées }
+        "500": { $ref: "#/components/responses/Problem" }
   /searches:
     get:
       tags: [saved-search]
@@ -305,6 +330,13 @@ components:
         query_hash: { type: string, description: "`query_hash` reçu de POST /v1/search" }
         asset_id: { type: string, format: uuid }
       required: [query_hash, asset_id]
+    SearchWeights:
+      type: object
+      description: "Pondérations RRF par tenant (doc 25 §4.4/§9)"
+      properties:
+        semantic: { type: number, format: float, default: 1.0 }
+        lexical: { type: number, format: float, default: 1.0 }
+        popularity: { type: number, format: float, default: 0.0 }
     FacetCount:
       type: object
       properties:

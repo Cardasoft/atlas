@@ -14,6 +14,7 @@ mod click;
 mod facet_config;
 mod searches;
 mod suggest;
+mod weights;
 
 /// État des routes système (readiness dépend de la DB si présente).
 #[derive(Clone)]
@@ -76,7 +77,7 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 facets: Arc::new(atlas_db::search_pg::PgFacets { db: db.clone() }),
                 logger: Arc::new(atlas_db::search_pg::PgSearchLog { db: db.clone() }),
                 popularity: Arc::new(atlas_db::search_pg::PgPopularity { db: db.clone() }),
-                weights: atlas_search::rrf::Weights::default(),
+                weights: Arc::new(atlas_db::search_pg::PgWeights { db: db.clone() }),
             };
             let ingest = assets::routes(assets::AssetsState {
                 db: db.clone(),
@@ -90,7 +91,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
             // Autocomplétion : suggestions de titres par préfixe (doc 25 §5).
             .merge(suggest::routes(suggest::SuggestState { db: db.clone() }))
             // Capture de clic : alimente le signal de popularité (doc 25 §4.4/§6).
-            .merge(click::routes(click::ClickState { db: db.clone() }));
+            .merge(click::routes(click::ClickState { db: db.clone() }))
+            // Pondérations RRF : équilibre sémantique/lexical/popularité par tenant (§4.4/§9).
+            .merge(weights::routes(weights::WeightsState { db: db.clone() }));
             (search_state, Some(ingest))
         }
         None => {
@@ -102,7 +105,7 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 facets: Arc::new(atlas_search::NoopFacets),
                 logger: Arc::new(atlas_search::NoopSearchLog),
                 popularity: Arc::new(atlas_search::NoopPopularity),
-                weights: atlas_search::rrf::Weights::default(),
+                weights: Arc::new(atlas_search::StaticWeights(atlas_search::rrf::Weights::default())),
             };
             (search_state, None) // ingestion indisponible sans DB
         }

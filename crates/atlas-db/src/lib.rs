@@ -15,6 +15,7 @@ pub mod saved;
 pub mod search_pg;
 pub mod suggest;
 pub mod vector;
+pub mod weights;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {

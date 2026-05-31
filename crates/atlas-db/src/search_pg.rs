@@ -6,8 +6,9 @@
 use async_trait::async_trait;
 use atlas_embed::Embedder;
 use atlas_search::{
-    understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, FacetCount, FacetProvider,
-    Facets, LexicalIndex, PopularityProvider, SearchLogEntry, SearchLogger, VectorIndex,
+    rrf::Weights, understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, FacetCount,
+    FacetProvider, Facets, LexicalIndex, PopularityProvider, SearchLogEntry, SearchLogger,
+    VectorIndex, WeightsProvider,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -173,6 +174,26 @@ impl PopularityProvider for PgPopularity {
                 // Dégradation gracieuse : pas de boost plutôt qu'échec de la recherche.
                 tracing::warn!(error = %e, "asset_popularity a échoué");
                 HashMap::new()
+            }
+        }
+    }
+}
+
+/// Fournisseur de pondérations RRF adossé à PostgreSQL : poids configurés par tenant (RLS).
+/// Tenant non configuré ou erreur → défauts neutres (la recherche reste fonctionnelle).
+pub struct PgWeights {
+    pub db: Db,
+}
+
+#[async_trait]
+impl WeightsProvider for PgWeights {
+    async fn weights(&self, ctx: &AuthCtx) -> Weights {
+        match self.db.get_search_weights(ctx.tenant_id).await {
+            Ok(Some((semantic, lexical, popularity))) => Weights { semantic, lexical, popularity },
+            Ok(None) => Weights::default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "get_search_weights a échoué — défauts appliqués");
+                Weights::default()
             }
         }
     }

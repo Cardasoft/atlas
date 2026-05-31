@@ -147,6 +147,22 @@ pub trait PopularityProvider: Send + Sync {
     async fn popularity(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, u64>;
 }
 
+/// Fournit les pondérations RRF applicables au tenant courant (doc 25 §4.4/§9). Permet de
+/// configurer les poids par tenant (impl base) sans coupler le pipeline au stockage.
+#[async_trait]
+pub trait WeightsProvider: Send + Sync {
+    async fn weights(&self, ctx: &AuthCtx) -> rrf::Weights;
+}
+
+/// Pondérations fixes (dev/air-gap sans DB, et tests) : renvoie toujours les mêmes poids.
+pub struct StaticWeights(pub rrf::Weights);
+#[async_trait]
+impl WeightsProvider for StaticWeights {
+    async fn weights(&self, _ctx: &AuthCtx) -> rrf::Weights {
+        self.0.clone()
+    }
+}
+
 /// État injecté dans le handler (indices + catalogue + facettes interchangeables).
 #[derive(Clone)]
 pub struct SearchState {
@@ -156,7 +172,7 @@ pub struct SearchState {
     pub facets: Arc<dyn FacetProvider>,
     pub logger: Arc<dyn SearchLogger>,
     pub popularity: Arc<dyn PopularityProvider>,
-    pub weights: rrf::Weights,
+    pub weights: Arc<dyn WeightsProvider>,
 }
 
 /// Mode de recherche (doc 25 §4.1). `lexical` saute la voie vectorielle (filtres explicites,
@@ -290,16 +306,18 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
             .map(|(rank, &asset_id)| rrf::Ranked { asset_id, rank })
             .collect::<Vec<_>>()
     };
-    let mut fused = rrf::fuse(&to_ranked(&v), &to_ranked(&l), &st.weights);
+    // Pondérations du tenant (doc 25 §9) ; défauts neutres si non configurées.
+    let weights = st.weights.weights(&ctx).await;
+    let mut fused = rrf::fuse(&to_ranked(&v), &to_ranked(&l), &weights);
 
     // Boost de popularité (§4.4) : appliqué sur la fenêtre fusionnée, avant pagination, donc
     // déterministe à requête égale → curseur stable. Interrogé seulement si le poids est actif
     // (évite un aller-retour base inutile). Normalisé 0..1 par le max de la fenêtre.
-    if st.weights.popularity != 0.0 {
+    if weights.popularity != 0.0 {
         let ids: Vec<Uuid> = fused.iter().map(|s| s.asset_id).collect();
         let counts = st.popularity.popularity(&ids, &ctx).await;
         let normalized = normalize_popularity(counts);
-        rrf::apply_popularity(&mut fused, &normalized, st.weights.popularity);
+        rrf::apply_popularity(&mut fused, &normalized, weights.popularity);
     }
 
     // Pagination stable par curseur (§4.6) : pas d'OFFSET, ordre fusionné déterministe.
@@ -508,7 +526,7 @@ mod tests {
             facets,
             logger,
             popularity: Arc::new(NoopPopularity),
-            weights: rrf::Weights::default(),
+            weights: Arc::new(StaticWeights(rrf::Weights::default())),
         }
     }
 
@@ -679,7 +697,11 @@ mod tests {
             facets: Arc::new(NoopFacets),
             logger: Arc::new(NoopSearchLog),
             popularity: Arc::new(FakePopularity(HashMap::from([(last, 100)]))),
-            weights: rrf::Weights { semantic: 1.0, lexical: 1.0, popularity: 5.0 },
+            weights: Arc::new(StaticWeights(rrf::Weights {
+                semantic: 1.0,
+                lexical: 1.0,
+                popularity: 5.0,
+            })),
         };
         let resp = search_handler(State(st), Json(req("mer"))).await;
         assert_eq!(resp.0.results[0].asset_id, last, "le plus cliqué remonte en tête");
@@ -703,7 +725,7 @@ mod tests {
             facets: Arc::new(NoopFacets),
             logger: Arc::new(NoopSearchLog),
             popularity: Arc::new(PanicPopularity),
-            weights: rrf::Weights::default(), // popularity = 0
+            weights: Arc::new(StaticWeights(rrf::Weights::default())), // popularity = 0
         };
         let resp = search_handler(State(st), Json(req("mer"))).await;
         assert!(!resp.0.results.is_empty());
