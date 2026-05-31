@@ -3,6 +3,7 @@
 //! query understanding par règles, handler `/v1/search`. Les implémentations réelles
 //! (SQL) arrivent quand PostgreSQL est branché ; ici un stub en mémoire valide le flux.
 
+pub mod cache;
 pub mod cursor;
 pub mod eval;
 pub mod rrf;
@@ -174,6 +175,8 @@ pub struct SearchState {
     pub logger: Arc<dyn SearchLogger>,
     pub popularity: Arc<dyn PopularityProvider>,
     pub weights: Arc<dyn WeightsProvider>,
+    /// Cache de résultats cohérent avec les droits (doc 25 §6) : `NoopCache` désactive, TTL en prod.
+    pub cache: Arc<dyn cache::SearchCache>,
 }
 
 /// Mode de recherche (doc 25 §4.1). `lexical` saute la voie vectorielle (filtres explicites,
@@ -186,6 +189,15 @@ pub enum Mode {
     Natural,
     Lexical,
     Example,
+}
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Mode::Natural => "natural",
+            Mode::Lexical => "lexical",
+            Mode::Example => "example",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,7 +237,7 @@ fn merge_filters(base: StructuredFilter, over: StructuredFilter) -> StructuredFi
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchResultItem {
     pub asset_id: Uuid,
     pub score: f32,
@@ -234,7 +246,7 @@ pub struct SearchResultItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rights_status: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResultItem>,
     pub interpreted_query: understanding::InterpretedQuery,
@@ -280,6 +292,22 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
     // Fenêtre fixe (§4.4) : la pagination se déroule entièrement dedans ; au moins une page.
     let k = OVERFETCH_K.max(page_size);
     let qhash = query_hash_u64(&req.query);
+
+    // Cache cohérent avec les droits (doc 25 §6) : l'empreinte de permissions est dans la clé,
+    // donc un hit ne peut jamais traverser un périmètre. Filtres explicites sérialisés tels quels.
+    let filters_json = serde_json::to_string(&req.filters).unwrap_or_default();
+    let ckey = cache::cache_key(
+        &cache::auth_fingerprint(&ctx),
+        &req.query,
+        req.mode.as_str(),
+        req.example_asset_id,
+        &filters_json,
+        page_size,
+        req.cursor.as_deref(),
+    );
+    if let Some(hit) = st.cache.get(&ckey).await {
+        return hit;
+    }
 
     // Voies lancées « en parallèle » (ici séquentiel sur le stub ; tokio::join! en prod).
     // Lexical : saute le vectoriel (§4.1). Example : réutilise l'embedding source (§4.2).
@@ -360,14 +388,21 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
         )
         .await;
 
-    SearchResponse {
+    let response = SearchResponse {
         results,
         interpreted_query: iq,
         facets,
         next_cursor: next.map(|c| c.encode()),
         query_hash: format!("{qhash:016x}"),
         degraded,
+    };
+
+    // Mise en cache (doc 25 §6) : on ne mémorise pas une réponse dégradée (vectoriel indisponible),
+    // qui ne reflète pas le résultat nominal et serait servie à tort jusqu'à expiration du TTL.
+    if !degraded {
+        st.cache.put(ckey, ctx.tenant_id, response.clone()).await;
     }
+    response
 }
 
 /// Normalise des comptes de clics bruts en scores 0..1 (fraction du max de la fenêtre).
@@ -528,6 +563,7 @@ mod tests {
             logger,
             popularity: Arc::new(NoopPopularity),
             weights: Arc::new(StaticWeights(rrf::Weights::default())),
+            cache: Arc::new(cache::NoopCache),
         }
     }
 
@@ -703,6 +739,7 @@ mod tests {
                 lexical: 1.0,
                 popularity: 5.0,
             })),
+            cache: Arc::new(cache::NoopCache),
         };
         let resp = search_handler(State(st), Json(req("mer"))).await;
         assert_eq!(resp.0.results[0].asset_id, last, "le plus cliqué remonte en tête");
@@ -727,6 +764,7 @@ mod tests {
             logger: Arc::new(NoopSearchLog),
             popularity: Arc::new(PanicPopularity),
             weights: Arc::new(StaticWeights(rrf::Weights::default())), // popularity = 0
+            cache: Arc::new(cache::NoopCache),
         };
         let resp = search_handler(State(st), Json(req("mer"))).await;
         assert!(!resp.0.results.is_empty());
@@ -816,5 +854,62 @@ mod tests {
         .await;
         assert!(resp.0.results.is_empty());
         assert!(resp.0.degraded, "example sans asset source → dégradé");
+    }
+
+    // État avec cache TTL réel + journal capturant : le nombre d'entrées journalisées compte les
+    // calculs effectifs (un hit retourne avant la journalisation), ce qui révèle hit vs miss.
+    fn state_with_cache(
+        ids: Vec<Uuid>,
+        logger: FakeLogger,
+        cache: Arc<dyn cache::SearchCache>,
+    ) -> SearchState {
+        let idx = Arc::new(InMemoryIndex { ids });
+        SearchState {
+            vector: idx.clone(),
+            lexical: idx,
+            catalog: Arc::new(NoopCatalog),
+            facets: Arc::new(NoopFacets),
+            logger: Arc::new(logger),
+            popularity: Arc::new(NoopPopularity),
+            weights: Arc::new(StaticWeights(rrf::Weights::default())),
+            cache,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_hit_skips_recomputation() {
+        let logger = FakeLogger::default();
+        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
+        let st = state_with_cache((1..=3).map(Uuid::from_u128).collect(), logger.clone(), cache);
+        // 1er appel : miss → calcul + journalisation.
+        let _ = run_search(st.clone(), req("mer"), AuthCtx::default()).await;
+        // 2e appel identique : hit → retour anticipé, aucune nouvelle journalisation.
+        let _ = run_search(st, req("mer"), AuthCtx::default()).await;
+        assert_eq!(logger.entries.lock().unwrap().len(), 1, "le 2e appel est servi par le cache");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cache_isolates_by_permission_fingerprint() {
+        let logger = FakeLogger::default();
+        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
+        let st = state_with_cache((1..=3).map(Uuid::from_u128).collect(), logger.clone(), cache);
+        let a = AuthCtx { tenant_id: Uuid::nil(), user_id: Some(Uuid::from_u128(10)) };
+        let b = AuthCtx { tenant_id: Uuid::nil(), user_id: Some(Uuid::from_u128(20)) };
+        let _ = run_search(st.clone(), req("mer"), a.clone()).await; // miss (A)
+        let _ = run_search(st.clone(), req("mer"), b).await; // périmètre B distinct → miss
+        let _ = run_search(st, req("mer"), a).await; // même périmètre que A → hit
+        assert_eq!(logger.entries.lock().unwrap().len(), 2, "deux périmètres ⇒ deux calculs (pas de fuite)");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn degraded_response_is_not_cached() {
+        let logger = FakeLogger::default();
+        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
+        // Index vide → mode natural dégradé (vectoriel attendu mais vide).
+        let st = state_with_cache(vec![], logger.clone(), cache);
+        let r1 = run_search(st.clone(), req("mer"), AuthCtx::default()).await;
+        assert!(r1.degraded);
+        let _ = run_search(st, req("mer"), AuthCtx::default()).await;
+        assert_eq!(logger.entries.lock().unwrap().len(), 2, "réponse dégradée non mémorisée → recalcul");
     }
 }

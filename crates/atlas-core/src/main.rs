@@ -78,6 +78,10 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 logger: Arc::new(atlas_db::search_pg::PgSearchLog { db: db.clone() }),
                 popularity: Arc::new(atlas_db::search_pg::PgPopularity { db: db.clone() }),
                 weights: Arc::new(atlas_db::search_pg::PgWeights { db: db.clone() }),
+                // Cache de résultats cohérent avec les droits (doc 25 §6), TTL court en mémoire.
+                cache: Arc::new(atlas_search::cache::InMemoryTtlCache::new(
+                    std::time::Duration::from_secs(60),
+                )),
             };
             let ingest = assets::routes(assets::AssetsState {
                 db: db.clone(),
@@ -106,6 +110,7 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 logger: Arc::new(atlas_search::NoopSearchLog),
                 popularity: Arc::new(atlas_search::NoopPopularity),
                 weights: Arc::new(atlas_search::StaticWeights(atlas_search::rrf::Weights::default())),
+                cache: Arc::new(atlas_search::cache::NoopCache), // dev/air-gap : pas de cache
             };
             (search_state, None) // ingestion indisponible sans DB
         }
