@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use atlas_embed::Embedder;
 use atlas_search::{
     understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, FacetCount, FacetProvider,
-    Facets, LexicalIndex, SearchLogEntry, SearchLogger, VectorIndex,
+    Facets, LexicalIndex, PopularityProvider, SearchLogEntry, SearchLogger, VectorIndex,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -156,6 +156,25 @@ impl FacetProvider for PgFacets {
             }
         }
         out
+    }
+}
+
+/// Fournisseur de popularité adossé à PostgreSQL : clics agrégés depuis `search_log` sous RLS.
+pub struct PgPopularity {
+    pub db: Db,
+}
+
+#[async_trait]
+impl PopularityProvider for PgPopularity {
+    async fn popularity(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, u64> {
+        match self.db.asset_popularity(ctx.tenant_id, ids).await {
+            Ok(rows) => rows.into_iter().map(|(id, c)| (id, c.max(0) as u64)).collect(),
+            Err(e) => {
+                // Dégradation gracieuse : pas de boost plutôt qu'échec de la recherche.
+                tracing::warn!(error = %e, "asset_popularity a échoué");
+                HashMap::new()
+            }
+        }
     }
 }
 

@@ -107,6 +107,23 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Suggestions" }
         "500": { $ref: "#/components/responses/Problem" }
+  /search/click:
+    post:
+      tags: [search]
+      operationId: recordSearchClick
+      summary: Enregistrer un clic résultat → signal de popularité (doc 25 §4.4/§6)
+      description: >-
+        Le client renvoie le `query_hash` reçu dans la réponse de recherche et l'asset ouvert.
+        Le clic est rattaché à la dernière recherche correspondante (RLS). Un `query_hash`
+        inconnu est ignoré sans erreur (204).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClickRequest" }
+      responses:
+        "204": { description: Clic pris en compte (ou ignoré si orphelin) }
+        "500": { $ref: "#/components/responses/Problem" }
   /searches:
     get:
       tags: [saved-search]
@@ -278,7 +295,16 @@ components:
             type: array
             items: { $ref: "#/components/schemas/FacetCount" }
         next_cursor: { type: string, nullable: true }
+        query_hash:
+          type: string
+          description: "Hash de la requête (doc 25 §4.4/§6) ; à renvoyer sur POST /v1/search/click"
         degraded: { type: boolean }
+    ClickRequest:
+      type: object
+      properties:
+        query_hash: { type: string, description: "`query_hash` reçu de POST /v1/search" }
+        asset_id: { type: string, format: uuid }
+      required: [query_hash, asset_id]
     FacetCount:
       type: object
       properties:

@@ -31,7 +31,8 @@ pub fn like_prefix_pattern(prefix: &str) -> String {
 
 impl Db {
     /// Suggère des titres d'assets commençant par `prefix` (ILIKE, insensible à la casse),
-    /// bornés par la RLS du tenant. `DISTINCT` + tri alphabétique, limité à `limit`.
+    /// bornés par la RLS du tenant. Tri par **popularité** (clics agrégés par titre, doc 25
+    /// §5) décroissante puis ordre alphabétique pour départager. Limité à `limit`.
     pub async fn suggest_titles(
         &self,
         tenant: Uuid,
@@ -44,10 +45,21 @@ impl Db {
             .bind(tenant.to_string())
             .execute(&mut *tx)
             .await?;
+        // Popularité agrégée par titre : on additionne les clics de tous les assets partageant
+        // le titre. `GROUP BY title` dédoublonne (équivaut au DISTINCT précédent).
         let rows = sqlx::query(
-            r#"SELECT DISTINCT title FROM asset
-               WHERE title IS NOT NULL AND title ILIKE $1 ESCAPE '\'
-               ORDER BY title LIMIT $2"#,
+            r#"SELECT a.title,
+                      COALESCE(SUM(pop.cnt), 0) AS popularity
+               FROM asset a
+               LEFT JOIN (
+                   SELECT c.aid AS asset_id, count(*) AS cnt
+                   FROM search_log sl, unnest(sl.clicked) AS c(aid)
+                   GROUP BY c.aid
+               ) pop ON pop.asset_id = a.id
+               WHERE a.title IS NOT NULL AND a.title ILIKE $1 ESCAPE '\'
+               GROUP BY a.title
+               ORDER BY popularity DESC, a.title ASC
+               LIMIT $2"#,
         )
         .bind(pattern)
         .bind(limit)

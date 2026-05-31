@@ -139,6 +139,14 @@ pub trait SearchLogger: Send + Sync {
     async fn log(&self, entry: SearchLogEntry, ctx: &AuthCtx);
 }
 
+/// Fournit le signal de popularité (clics agrégés) d'un lot d'assets, borné par la RLS.
+/// Renvoie des **comptes bruts** par asset (assets jamais cliqués absents) ; la normalisation
+/// 0..1 sur la fenêtre est faite par le pipeline avant le boost RRF (doc 25 §4.4).
+#[async_trait]
+pub trait PopularityProvider: Send + Sync {
+    async fn popularity(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, u64>;
+}
+
 /// État injecté dans le handler (indices + catalogue + facettes interchangeables).
 #[derive(Clone)]
 pub struct SearchState {
@@ -147,6 +155,7 @@ pub struct SearchState {
     pub catalog: Arc<dyn AssetCatalog>,
     pub facets: Arc<dyn FacetProvider>,
     pub logger: Arc<dyn SearchLogger>,
+    pub popularity: Arc<dyn PopularityProvider>,
     pub weights: rrf::Weights,
 }
 
@@ -218,6 +227,9 @@ pub struct SearchResponse {
     /// Curseur de la page suivante (doc 25 §4.6) ; absent si plus de résultats.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Hash de la requête (doc 25 §4.4/§6) : à renvoyer tel quel sur `POST /v1/search/click`
+    /// pour rattacher le clic à la recherche qui l'a servi (signal de popularité).
+    pub query_hash: String,
     pub degraded: bool,
 }
 
@@ -278,7 +290,17 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
             .map(|(rank, &asset_id)| rrf::Ranked { asset_id, rank })
             .collect::<Vec<_>>()
     };
-    let fused = rrf::fuse(&to_ranked(&v), &to_ranked(&l), &st.weights);
+    let mut fused = rrf::fuse(&to_ranked(&v), &to_ranked(&l), &st.weights);
+
+    // Boost de popularité (§4.4) : appliqué sur la fenêtre fusionnée, avant pagination, donc
+    // déterministe à requête égale → curseur stable. Interrogé seulement si le poids est actif
+    // (évite un aller-retour base inutile). Normalisé 0..1 par le max de la fenêtre.
+    if st.weights.popularity != 0.0 {
+        let ids: Vec<Uuid> = fused.iter().map(|s| s.asset_id).collect();
+        let counts = st.popularity.popularity(&ids, &ctx).await;
+        let normalized = normalize_popularity(counts);
+        rrf::apply_popularity(&mut fused, &normalized, st.weights.popularity);
+    }
 
     // Pagination stable par curseur (§4.6) : pas d'OFFSET, ordre fusionné déterministe.
     // Un curseur d'une AUTRE requête (query_hash différent) est ignoré → page 1.
@@ -324,8 +346,22 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
         interpreted_query: iq,
         facets,
         next_cursor: next.map(|c| c.encode()),
+        query_hash: format!("{qhash:016x}"),
         degraded,
     }
+}
+
+/// Normalise des comptes de clics bruts en scores 0..1 (fraction du max de la fenêtre).
+/// Fenêtre vide ou max nul → table vide (boost neutre).
+fn normalize_popularity(counts: HashMap<Uuid, u64>) -> HashMap<Uuid, f32> {
+    let max = counts.values().copied().max().unwrap_or(0);
+    if max == 0 {
+        return HashMap::new();
+    }
+    counts
+        .into_iter()
+        .map(|(id, c)| (id, c as f32 / max as f32))
+        .collect()
 }
 
 /// Shim de test : exécute le pipeline avec une identité par défaut (tenant nil, mono-utilisateur),
@@ -390,6 +426,15 @@ pub struct NoopSearchLog;
 #[async_trait]
 impl SearchLogger for NoopSearchLog {
     async fn log(&self, _entry: SearchLogEntry, _ctx: &AuthCtx) {}
+}
+
+/// Fournisseur de popularité inerte (dev/air-gap sans DB) : aucun signal de clic.
+pub struct NoopPopularity;
+#[async_trait]
+impl PopularityProvider for NoopPopularity {
+    async fn popularity(&self, _ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, u64> {
+        HashMap::new()
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +507,7 @@ mod tests {
             catalog,
             facets,
             logger,
+            popularity: Arc::new(NoopPopularity),
             weights: rrf::Weights::default(),
         }
     }
@@ -609,6 +655,58 @@ mod tests {
         assert!(!e.query_hash.is_empty());
         // L'interprétation sérialisée contient le filtre déduit (orientation paysage).
         assert!(e.interpreted_json.contains("landscape"));
+    }
+
+    /// Fournisseur de popularité de test : comptes de clics fixes par asset.
+    struct FakePopularity(HashMap<Uuid, u64>);
+    #[async_trait]
+    impl PopularityProvider for FakePopularity {
+        async fn popularity(&self, ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, u64> {
+            ids.iter().filter_map(|id| self.0.get(id).map(|&c| (*id, c))).collect()
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn popularity_signal_reorders_results() {
+        let ids: Vec<Uuid> = (1..=3).map(Uuid::from_u128).collect();
+        let last = ids[2];
+        // Le dernier asset est massivement cliqué → doit remonter en tête une fois le boost actif.
+        let idx = Arc::new(InMemoryIndex { ids: ids.clone() });
+        let st = SearchState {
+            vector: idx.clone(),
+            lexical: idx,
+            catalog: Arc::new(NoopCatalog),
+            facets: Arc::new(NoopFacets),
+            logger: Arc::new(NoopSearchLog),
+            popularity: Arc::new(FakePopularity(HashMap::from([(last, 100)]))),
+            weights: rrf::Weights { semantic: 1.0, lexical: 1.0, popularity: 5.0 },
+        };
+        let resp = search_handler(State(st), Json(req("mer"))).await;
+        assert_eq!(resp.0.results[0].asset_id, last, "le plus cliqué remonte en tête");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn popularity_not_queried_when_weight_zero() {
+        // Poids nul → aucun appel au fournisseur ; un fournisseur qui panique resterait inerte.
+        struct PanicPopularity;
+        #[async_trait]
+        impl PopularityProvider for PanicPopularity {
+            async fn popularity(&self, _ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, u64> {
+                panic!("ne doit pas être interrogé quand le poids est nul");
+            }
+        }
+        let idx = Arc::new(InMemoryIndex { ids: (1..=3).map(Uuid::from_u128).collect() });
+        let st = SearchState {
+            vector: idx.clone(),
+            lexical: idx,
+            catalog: Arc::new(NoopCatalog),
+            facets: Arc::new(NoopFacets),
+            logger: Arc::new(NoopSearchLog),
+            popularity: Arc::new(PanicPopularity),
+            weights: rrf::Weights::default(), // popularity = 0
+        };
+        let resp = search_handler(State(st), Json(req("mer"))).await;
+        assert!(!resp.0.results.is_empty());
     }
 
     #[test]
