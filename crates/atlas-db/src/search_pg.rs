@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use atlas_embed::Embedder;
 use atlas_search::{
     understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, FacetCount, FacetProvider,
-    Facets, LexicalIndex, VectorIndex,
+    Facets, LexicalIndex, SearchLogEntry, SearchLogger, VectorIndex,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -113,6 +113,33 @@ impl FacetProvider for PgFacets {
                 tracing::warn!(error = %e, "facet_counts a échoué");
                 Facets::new()
             }
+        }
+    }
+}
+
+/// Journal de recherche adossé à PostgreSQL (doc 25 §3.2/§6). Best-effort : une erreur
+/// d'écriture est tracée mais n'affecte pas la réponse de recherche.
+pub struct PgSearchLog {
+    pub db: Db,
+}
+
+#[async_trait]
+impl SearchLogger for PgSearchLog {
+    async fn log(&self, entry: SearchLogEntry, ctx: &AuthCtx) {
+        if let Err(e) = self
+            .db
+            .insert_search_log(
+                ctx.tenant_id,
+                None, // user_id résolu depuis le jeton à terme (doc 38)
+                &entry.query_hash,
+                &entry.interpreted_json,
+                entry.result_count as i32,
+                Some(entry.latency_ms as i32),
+                entry.degraded,
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "insert_search_log a échoué");
         }
     }
 }

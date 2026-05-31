@@ -11,9 +11,19 @@ use async_trait::async_trait;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
 use understanding::{interpret, StructuredFilter};
 use uuid::Uuid;
+
+/// Hash déterministe d'une requête normalisée pour le journal (clé d'agrégation, §3.2).
+/// `DefaultHasher` (SipHash à clés fixes) → stable entre exécutions, non réversible.
+fn query_hash(query: &str) -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    query.trim().to_lowercase().hash(&mut h);
+    format!("{:016x}", h.finish())
+}
 
 /// Contexte d'autorisation (doc 38). M1 : porte au minimum le tenant.
 #[derive(Debug, Clone)]
@@ -64,6 +74,25 @@ pub trait FacetProvider: Send + Sync {
     async fn facets(&self, f: &StructuredFilter, ctx: &AuthCtx) -> Facets;
 }
 
+/// Entrée du journal de recherche (doc 25 §3.2/§6) : alimente nDCG offline et popularité.
+#[derive(Debug, Clone)]
+pub struct SearchLogEntry {
+    /// Hash déterministe de la requête normalisée (clé d'agrégation, non réversible en clair).
+    pub query_hash: String,
+    /// Sortie d'understanding sérialisée (jsonb côté base).
+    pub interpreted_json: String,
+    pub result_count: usize,
+    pub latency_ms: u32,
+    pub degraded: bool,
+}
+
+/// Journalise une recherche après exécution. L'écriture ne doit jamais casser la réponse :
+/// les implémentations dégradent silencieusement en cas d'erreur (best-effort).
+#[async_trait]
+pub trait SearchLogger: Send + Sync {
+    async fn log(&self, entry: SearchLogEntry, ctx: &AuthCtx);
+}
+
 /// État injecté dans le handler (indices + catalogue + facettes interchangeables).
 #[derive(Clone)]
 pub struct SearchState {
@@ -71,6 +100,7 @@ pub struct SearchState {
     pub lexical: Arc<dyn LexicalIndex>,
     pub catalog: Arc<dyn AssetCatalog>,
     pub facets: Arc<dyn FacetProvider>,
+    pub logger: Arc<dyn SearchLogger>,
     pub weights: rrf::Weights,
 }
 
@@ -150,6 +180,7 @@ async fn search_handler(
     State(st): State<SearchState>,
     Json(req): Json<SearchRequest>,
 ) -> Json<SearchResponse> {
+    let started = Instant::now();
     // M1 : tenant fixe (sera résolu depuis le jeton, doc 38).
     let ctx = AuthCtx { tenant_id: Uuid::nil() };
     let mut iq = interpret(&req.query);
@@ -201,6 +232,20 @@ async fn search_handler(
         })
         .collect();
 
+    // Journalisation best-effort (doc 25 §3.2/§6) : ne casse jamais la réponse.
+    st.logger
+        .log(
+            SearchLogEntry {
+                query_hash: query_hash(&req.query),
+                interpreted_json: serde_json::to_string(&iq).unwrap_or_else(|_| "{}".into()),
+                result_count: fused.len(),
+                latency_ms: started.elapsed().as_millis() as u32,
+                degraded,
+            },
+            &ctx,
+        )
+        .await;
+
     Json(SearchResponse {
         results,
         interpreted_query: iq,
@@ -247,6 +292,13 @@ impl FacetProvider for NoopFacets {
     }
 }
 
+/// Journal de recherche inerte (dev/air-gap sans DB) : ne persiste rien.
+pub struct NoopSearchLog;
+#[async_trait]
+impl SearchLogger for NoopSearchLog {
+    async fn log(&self, _entry: SearchLogEntry, _ctx: &AuthCtx) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,18 +336,31 @@ mod tests {
         }
     }
 
+    /// Journal de test : capture les entrées dans un buffer partagé.
+    #[derive(Clone, Default)]
+    struct FakeLogger {
+        entries: Arc<std::sync::Mutex<Vec<SearchLogEntry>>>,
+    }
+    #[async_trait]
+    impl SearchLogger for FakeLogger {
+        async fn log(&self, entry: SearchLogEntry, _ctx: &AuthCtx) {
+            self.entries.lock().unwrap().push(entry);
+        }
+    }
+
     fn state_with(ids: Vec<Uuid>) -> SearchState {
-        state_full(ids, Arc::new(NoopCatalog), Arc::new(NoopFacets))
+        state_full(ids, Arc::new(NoopCatalog), Arc::new(NoopFacets), Arc::new(NoopSearchLog))
     }
 
     fn state_with_catalog(ids: Vec<Uuid>, catalog: Arc<dyn AssetCatalog>) -> SearchState {
-        state_full(ids, catalog, Arc::new(NoopFacets))
+        state_full(ids, catalog, Arc::new(NoopFacets), Arc::new(NoopSearchLog))
     }
 
     fn state_full(
         ids: Vec<Uuid>,
         catalog: Arc<dyn AssetCatalog>,
         facets: Arc<dyn FacetProvider>,
+        logger: Arc<dyn SearchLogger>,
     ) -> SearchState {
         let idx = Arc::new(InMemoryIndex { ids });
         SearchState {
@@ -303,6 +368,7 @@ mod tests {
             lexical: idx,
             catalog,
             facets,
+            logger,
             weights: rrf::Weights::default(),
         }
     }
@@ -407,7 +473,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn facets_are_returned_in_response() {
         let resp = search_handler(
-            State(state_full(vec![Uuid::from_u128(1)], Arc::new(NoopCatalog), Arc::new(FakeFacets))),
+            State(state_full(
+                vec![Uuid::from_u128(1)],
+                Arc::new(NoopCatalog),
+                Arc::new(FakeFacets),
+                Arc::new(NoopSearchLog),
+            )),
             Json(req("mer")),
         )
         .await;
@@ -424,5 +495,31 @@ mod tests {
         )
         .await;
         assert!(resp.0.facets.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn search_is_logged_with_metrics() {
+        let logger = Arc::new(FakeLogger::default());
+        let st = state_full(
+            (1..=3).map(Uuid::from_u128).collect(),
+            Arc::new(NoopCatalog),
+            Arc::new(NoopFacets),
+            logger.clone(),
+        );
+        let _ = search_handler(State(st), Json(req("plage paysage"))).await;
+        let entries = logger.entries.lock().unwrap();
+        assert_eq!(entries.len(), 1, "une entrée de journal par recherche");
+        let e = &entries[0];
+        assert_eq!(e.result_count, 3);
+        assert!(!e.degraded);
+        assert!(!e.query_hash.is_empty());
+        // L'interprétation sérialisée contient le filtre déduit (orientation paysage).
+        assert!(e.interpreted_json.contains("landscape"));
+    }
+
+    #[test]
+    fn query_hash_is_stable_and_normalized() {
+        assert_eq!(query_hash("Plage "), query_hash("plage"));
+        assert_ne!(query_hash("plage"), query_hash("montagne"));
     }
 }

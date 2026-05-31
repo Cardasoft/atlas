@@ -167,4 +167,41 @@ impl Db {
         tx.commit().await?;
         Ok(out)
     }
+
+    /// Journalise une recherche (doc 25 §3.2/§6). `interpreted` est inséré en jsonb via cast
+    /// `$::jsonb` (pas de feature sqlx json). N'échoue jamais silencieusement côté appelant :
+    /// l'erreur remonte mais l'index la dégrade (le log ne doit pas casser la recherche).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_search_log(
+        &self,
+        tenant: Uuid,
+        user_id: Option<Uuid>,
+        query_hash: &str,
+        interpreted_json: &str,
+        result_count: i32,
+        latency_ms: Option<i32>,
+        degraded: bool,
+    ) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO search_log
+                 (tenant_id, user_id, query_hash, interpreted, result_count, latency_ms, degraded)
+               VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)"#,
+        )
+        .bind(tenant)
+        .bind(user_id)
+        .bind(query_hash)
+        .bind(interpreted_json)
+        .bind(result_count)
+        .bind(latency_ms)
+        .bind(degraded)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }
