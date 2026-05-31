@@ -5,7 +5,10 @@
 
 use async_trait::async_trait;
 use atlas_embed::Embedder;
-use atlas_search::{understanding::StructuredFilter, AuthCtx, LexicalIndex, VectorIndex};
+use atlas_search::{
+    understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, LexicalIndex, VectorIndex,
+};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -54,6 +57,30 @@ impl VectorIndex for PgVectorIndex {
                 // Dégradation gracieuse : on retombe sur le lexical (doc 04 §3.3).
                 tracing::warn!(error = %e, "vector_search a échoué");
                 Vec::new()
+            }
+        }
+    }
+}
+
+/// Catalogue d'assets adossé à PostgreSQL : hydrate les résultats (titre, droits) sous RLS.
+pub struct PgAssetCatalog {
+    pub db: Db,
+}
+
+#[async_trait]
+impl AssetCatalog for PgAssetCatalog {
+    async fn summaries(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary> {
+        match self.db.asset_summaries(ctx.tenant_id, ids).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(id, title, rights_status)| {
+                    (id, AssetSummary { title, rights_status: Some(rights_status) })
+                })
+                .collect(),
+            Err(e) => {
+                // Dégradation gracieuse : résultats sans métadonnées plutôt qu'échec total.
+                tracing::warn!(error = %e, "asset_summaries a échoué");
+                HashMap::new()
             }
         }
     }

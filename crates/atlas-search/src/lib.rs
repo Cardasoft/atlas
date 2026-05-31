@@ -10,6 +10,7 @@ pub mod understanding;
 use async_trait::async_trait;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use understanding::{interpret, StructuredFilter};
 use uuid::Uuid;
@@ -30,11 +31,26 @@ pub trait LexicalIndex: Send + Sync {
     async fn search(&self, query: &str, k: usize, f: &StructuredFilter, ctx: &AuthCtx) -> Vec<Uuid>;
 }
 
-/// État injecté dans le handler (indices interchangeables).
+/// Résumé d'asset pour l'affichage des résultats (doc 25 §5).
+#[derive(Debug, Clone, Default)]
+pub struct AssetSummary {
+    pub title: Option<String>,
+    pub rights_status: Option<String>,
+}
+
+/// Hydratation des résultats : résout les métadonnées d'affichage des assets d'une page,
+/// dans le périmètre autorisé (RLS/tenant). Découplé des index pour rester interchangeable.
+#[async_trait]
+pub trait AssetCatalog: Send + Sync {
+    async fn summaries(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary>;
+}
+
+/// État injecté dans le handler (indices + catalogue interchangeables).
 #[derive(Clone)]
 pub struct SearchState {
     pub vector: Arc<dyn VectorIndex>,
     pub lexical: Arc<dyn LexicalIndex>,
+    pub catalog: Arc<dyn AssetCatalog>,
     pub weights: rrf::Weights,
 }
 
@@ -83,6 +99,10 @@ fn merge_filters(base: StructuredFilter, over: StructuredFilter) -> StructuredFi
 pub struct SearchResultItem {
     pub asset_id: Uuid,
     pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rights_status: Option<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct SearchResponse {
@@ -140,11 +160,19 @@ async fn search_handler(
     let cursor = req.cursor.as_deref().and_then(cursor::Cursor::decode);
     let (page, next) = cursor::paginate(&fused, cursor, page_size);
 
+    // Hydratation : métadonnées d'affichage de la seule page (§5), dans le périmètre autorisé.
+    let page_ids: Vec<Uuid> = page.iter().map(|s| s.asset_id).collect();
+    let mut summaries = st.catalog.summaries(&page_ids, &ctx).await;
     let results = page
         .into_iter()
-        .map(|s| SearchResultItem {
-            asset_id: s.asset_id,
-            score: s.score,
+        .map(|s| {
+            let sum = summaries.remove(&s.asset_id).unwrap_or_default();
+            SearchResultItem {
+                asset_id: s.asset_id,
+                score: s.score,
+                title: sum.title,
+                rights_status: sum.rights_status,
+            }
         })
         .collect();
 
@@ -174,15 +202,46 @@ impl LexicalIndex for InMemoryIndex {
     }
 }
 
+/// Catalogue sans métadonnées (dev/air-gap sans DB) : les résultats portent uniquement
+/// `asset_id` + `score`. Remplacé par un catalogue adossé à la base quand PostgreSQL est branché.
+pub struct NoopCatalog;
+#[async_trait]
+impl AssetCatalog for NoopCatalog {
+    async fn summaries(&self, _ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary> {
+        HashMap::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Catalogue de test : renvoie un titre dérivé de l'id et un statut de droits fixe.
+    struct FakeCatalog;
+    #[async_trait]
+    impl AssetCatalog for FakeCatalog {
+        async fn summaries(&self, ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary> {
+            ids.iter()
+                .map(|&id| {
+                    (id, AssetSummary {
+                        title: Some(format!("asset-{}", id.as_u128())),
+                        rights_status: Some("valid".into()),
+                    })
+                })
+                .collect()
+        }
+    }
+
     fn state_with(ids: Vec<Uuid>) -> SearchState {
+        state_with_catalog(ids, Arc::new(NoopCatalog))
+    }
+
+    fn state_with_catalog(ids: Vec<Uuid>, catalog: Arc<dyn AssetCatalog>) -> SearchState {
         let idx = Arc::new(InMemoryIndex { ids });
         SearchState {
             vector: idx.clone(),
             lexical: idx,
+            catalog,
             weights: rrf::Weights::default(),
         }
     }
@@ -258,5 +317,29 @@ mod tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), ids.len(), "aucun doublon ni saut sur la pagination");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn results_are_hydrated_with_metadata() {
+        let id = Uuid::from_u128(7);
+        let resp = search_handler(
+            State(state_with_catalog(vec![id], Arc::new(FakeCatalog))),
+            Json(req("mer")),
+        )
+        .await;
+        let item = resp.0.results.iter().find(|r| r.asset_id == id).expect("résultat présent");
+        assert_eq!(item.title.as_deref(), Some("asset-7"));
+        assert_eq!(item.rights_status.as_deref(), Some("valid"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn noop_catalog_leaves_metadata_empty() {
+        let resp = search_handler(
+            State(state_with(vec![Uuid::from_u128(1)])),
+            Json(req("mer")),
+        )
+        .await;
+        assert!(resp.0.results[0].title.is_none());
+        assert!(resp.0.results[0].rights_status.is_none());
     }
 }

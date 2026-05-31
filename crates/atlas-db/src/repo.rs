@@ -168,6 +168,13 @@ mod tests {
         let filter = atlas_search::understanding::StructuredFilter::default();
         let vec = db.vector_search(tenant, &emb.encode("plage"), &filter, 10).await.unwrap();
         assert!(vec.contains(&a), "kNN doit retrouver l'asset");
+
+        // Hydratation : asset_summaries renvoie titre + droits pour l'asset visible (doc 25 §5).
+        let sums = db.asset_summaries(tenant, &[a]).await.unwrap();
+        let (id, title, rights) = sums.iter().find(|(id, _, _)| *id == a).expect("résumé présent");
+        assert_eq!(*id, a);
+        assert_eq!(title.as_deref(), Some("Plage au coucher de soleil"));
+        assert_eq!(rights, "valid");
     }
 
     #[tokio::test]

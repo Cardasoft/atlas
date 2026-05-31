@@ -76,4 +76,39 @@ impl Db {
         tx.commit().await?;
         Ok(ids)
     }
+
+    /// Métadonnées d'affichage d'un lot d'assets (doc 25 §5), bornées par la RLS du tenant.
+    /// Renvoie `(id, title, rights_status)` pour les ids visibles dans le périmètre.
+    pub async fn asset_summaries(
+        &self,
+        tenant: Uuid,
+        ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Option<String>, String)>, DbError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT id, title, rights_status FROM asset WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(&mut *tx)
+        .await?;
+        let out = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get::<Uuid, _>("id"),
+                    r.get::<Option<String>, _>("title"),
+                    r.get::<String, _>("rights_status"),
+                )
+            })
+            .collect();
+        tx.commit().await?;
+        Ok(out)
+    }
 }
