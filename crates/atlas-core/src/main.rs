@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 mod assets;
+mod searches;
 
 /// État des routes système (readiness dépend de la DB si présente).
 #[derive(Clone)]
@@ -76,7 +77,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 db: db.clone(),
                 embedder: embedder.clone(),
                 hub: hub.clone(),
-            });
+            })
+            // Recherches enregistrées : disponibles avec la DB (doc 25 §3.2).
+            .merge(searches::routes(searches::SearchesState { db: db.clone() }));
             (search_state, Some(ingest))
         }
         None => {

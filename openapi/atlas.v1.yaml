@@ -14,6 +14,7 @@ tags:
   - name: system
   - name: assets
   - name: search
+  - name: saved-search
 paths:
   /healthz:
     get:
@@ -56,6 +57,52 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SearchResponse" }
         "422": { $ref: "#/components/responses/Problem" }
+  /searches:
+    get:
+      tags: [saved-search]
+      operationId: listSavedSearches
+      summary: Lister les recherches enregistrées du propriétaire (doc 25 §3.2)
+      responses:
+        "200":
+          description: Recherches enregistrées
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SavedSearch" }
+        "500": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [saved-search]
+      operationId: createSavedSearch
+      summary: Enregistrer une recherche (corps `/v1/search` rejouable)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSavedSearchRequest" }
+      responses:
+        "201":
+          description: Recherche enregistrée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                required: [id]
+        "500": { $ref: "#/components/responses/Problem" }
+  /searches/{id}:
+    delete:
+      tags: [saved-search]
+      operationId: deleteSavedSearch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Supprimée }
+        "404": { $ref: "#/components/responses/Problem" }
   /assets:
     post:
       tags: [assets]
@@ -183,6 +230,22 @@ components:
         value: { type: string }
         count: { type: integer, format: int64, minimum: 0 }
       required: [value, count]
+    CreateSavedSearchRequest:
+      type: object
+      properties:
+        name: { type: string }
+        query: { type: object, additionalProperties: true, description: "Corps /v1/search à rejouer" }
+        notify: { type: boolean, default: false }
+      required: [name, query]
+    SavedSearch:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        query: { type: object, additionalProperties: true }
+        notify: { type: boolean }
+        created_at: { type: string }
+      required: [id, name, query, notify, created_at]
     Problem:
       type: object
       properties:

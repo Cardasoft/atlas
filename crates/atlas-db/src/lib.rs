@@ -9,6 +9,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub mod repo;
+pub mod saved;
 pub mod search_pg;
 pub mod vector;
 
