@@ -22,12 +22,13 @@ use std::time::Instant;
 use understanding::{interpret, StructuredFilter};
 use uuid::Uuid;
 
-/// Hash déterministe d'une requête normalisée pour le journal (clé d'agrégation, §3.2).
-/// `DefaultHasher` (SipHash à clés fixes) → stable entre exécutions, non réversible.
-fn query_hash(query: &str) -> String {
+/// Hash déterministe d'une requête normalisée (clé d'agrégation du journal §3.2 ET liaison
+/// du curseur à sa requête §4.6). `DefaultHasher` (SipHash à clés fixes) → stable entre
+/// exécutions, non réversible.
+fn query_hash_u64(query: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     query.trim().to_lowercase().hash(&mut h);
-    format!("{:016x}", h.finish())
+    h.finish()
 }
 
 /// Contexte d'autorisation (doc 38). M1 : tenant + utilisateur résolus depuis la requête
@@ -182,6 +183,10 @@ fn default_page_size() -> usize {
     50
 }
 const MAX_PAGE_SIZE: usize = 200;
+/// Fenêtre de sur-récupération avant fusion (doc 25 §4.4/§7, `k ≈ 200`). La pagination par
+/// curseur se déroule **dans** cette fenêtre déterministe (re-fusion stable à requête égale,
+/// §4.6) : on ne pagine pas au-delà du top-k pertinent — borne assumée d'une recherche.
+const OVERFETCH_K: usize = 200;
 
 /// Fusionne les filtres déduits (`base`) et explicites (`over`) : le client prime champ
 /// par champ quand il fournit une valeur (doc 25 §4.1, filtres éditables).
@@ -243,7 +248,9 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
     }
 
     let page_size = req.page_size.clamp(1, MAX_PAGE_SIZE);
-    let k = (page_size * 4).max(50); // sur-récupération avant fusion
+    // Fenêtre fixe (§4.4) : la pagination se déroule entièrement dedans ; au moins une page.
+    let k = OVERFETCH_K.max(page_size);
+    let qhash = query_hash_u64(&req.query);
 
     // Voies lancées « en parallèle » (ici séquentiel sur le stub ; tokio::join! en prod).
     // Lexical : saute le vectoriel (§4.1). Example : réutilise l'embedding source (§4.2).
@@ -274,8 +281,13 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
     let fused = rrf::fuse(&to_ranked(&v), &to_ranked(&l), &st.weights);
 
     // Pagination stable par curseur (§4.6) : pas d'OFFSET, ordre fusionné déterministe.
-    let cursor = req.cursor.as_deref().and_then(cursor::Cursor::decode);
-    let (page, next) = cursor::paginate(&fused, cursor, page_size);
+    // Un curseur d'une AUTRE requête (query_hash différent) est ignoré → page 1.
+    let cursor = req
+        .cursor
+        .as_deref()
+        .and_then(cursor::Cursor::decode)
+        .filter(|c| c.query_hash == qhash);
+    let (page, next) = cursor::paginate(&fused, cursor, page_size, qhash);
 
     // Hydratation : métadonnées d'affichage de la seule page (§5), dans le périmètre autorisé.
     let page_ids: Vec<Uuid> = page.iter().map(|s| s.asset_id).collect();
@@ -297,7 +309,7 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
     st.logger
         .log(
             SearchLogEntry {
-                query_hash: query_hash(&req.query),
+                query_hash: format!("{qhash:016x}"),
                 interpreted_json: serde_json::to_string(&iq).unwrap_or_else(|_| "{}".into()),
                 result_count: fused.len(),
                 latency_ms: started.elapsed().as_millis() as u32,
@@ -601,8 +613,8 @@ mod tests {
 
     #[test]
     fn query_hash_is_stable_and_normalized() {
-        assert_eq!(query_hash("Plage "), query_hash("plage"));
-        assert_ne!(query_hash("plage"), query_hash("montagne"));
+        assert_eq!(query_hash_u64("Plage "), query_hash_u64("plage"));
+        assert_ne!(query_hash_u64("plage"), query_hash_u64("montagne"));
     }
 
     #[test]
@@ -624,6 +636,35 @@ mod tests {
         let ctx = resolve_auth(Some("pas-un-uuid"), Some("non-plus"));
         assert_eq!(ctx.tenant_id, Uuid::nil());
         assert_eq!(ctx.user_id, None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn foreign_cursor_is_ignored_returns_first_page() {
+        let ids: Vec<Uuid> = (1..=5).map(Uuid::from_u128).collect();
+        // Page 1 de référence (sans curseur).
+        let p1 = search_handler(
+            State(state_with(ids.clone())),
+            Json(SearchRequest { page_size: 2, ..req("mer") }),
+        )
+        .await;
+        let want: Vec<Uuid> = p1.0.results.iter().map(|r| r.asset_id).collect();
+        // Curseur forgé pour une AUTRE requête (query_hash différent) → doit être ignoré.
+        let foreign = cursor::Cursor {
+            score: 0.0,
+            asset_id: Uuid::nil(),
+            query_hash: query_hash_u64("mer").wrapping_add(1),
+        };
+        let resp = search_handler(
+            State(state_with(ids)),
+            Json(SearchRequest {
+                page_size: 2,
+                cursor: Some(foreign.encode()),
+                ..req("mer")
+            }),
+        )
+        .await;
+        let got: Vec<Uuid> = resp.0.results.iter().map(|r| r.asset_id).collect();
+        assert_eq!(got, want, "curseur étranger ignoré → page 1 servie");
     }
 
     #[tokio::test(flavor = "current_thread")]

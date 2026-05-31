@@ -13,13 +13,22 @@ use uuid::Uuid;
 pub struct Cursor {
     pub score: f32,
     pub asset_id: Uuid,
+    /// Hash de la requête : lie le curseur à SA recherche. Un curseur présenté avec une
+    /// autre requête est rejeté par le handler (→ page 1), évitant un fenêtrage incohérent.
+    pub query_hash: u64,
 }
 
 impl Cursor {
     /// Encode en jeton opaque url-safe. Le score est sérialisé par ses **bits exacts**
-    /// (aucune perte de précision) pour que la comparaison de page reste fidèle.
+    /// (aucune perte de précision) pour que la comparaison de page reste fidèle ; le
+    /// `query_hash` est joint pour lier le curseur à sa requête.
     pub fn encode(&self) -> String {
-        let raw = format!("{:08x}:{}", self.score.to_bits(), self.asset_id.simple());
+        let raw = format!(
+            "{:08x}:{}:{:016x}",
+            self.score.to_bits(),
+            self.asset_id.simple(),
+            self.query_hash
+        );
         to_hex(raw.as_bytes())
     }
 
@@ -27,10 +36,17 @@ impl Cursor {
     pub fn decode(token: &str) -> Option<Self> {
         let raw = from_hex(token)?;
         let s = std::str::from_utf8(&raw).ok()?;
-        let (bits, id) = s.split_once(':')?;
+        let mut parts = s.split(':');
+        let bits = parts.next()?;
+        let id = parts.next()?;
+        let qh = parts.next()?;
+        if parts.next().is_some() {
+            return None; // champs surnuméraires → jeton invalide
+        }
         Some(Self {
             score: f32::from_bits(u32::from_str_radix(bits, 16).ok()?),
             asset_id: Uuid::parse_str(id).ok()?,
+            query_hash: u64::from_str_radix(qh, 16).ok()?,
         })
     }
 }
@@ -42,8 +58,14 @@ fn is_after(item: &Scored, c: &Cursor) -> bool {
 }
 
 /// Découpe une page dans la liste fusionnée triée. Renvoie la page et le curseur suivant
-/// (`None` s'il n'y a plus de résultats au-delà).
-pub fn paginate(sorted: &[Scored], cursor: Option<Cursor>, page_size: usize) -> (Vec<Scored>, Option<Cursor>) {
+/// (`None` s'il n'y a plus de résultats au-delà). `query_hash` est estampillé sur le curseur
+/// suivant pour le lier à la requête courante (doc 25 §4.6).
+pub fn paginate(
+    sorted: &[Scored],
+    cursor: Option<Cursor>,
+    page_size: usize,
+    query_hash: u64,
+) -> (Vec<Scored>, Option<Cursor>) {
     let start = match cursor {
         Some(c) => sorted.iter().position(|it| is_after(it, &c)).unwrap_or(sorted.len()),
         None => 0,
@@ -53,6 +75,7 @@ pub fn paginate(sorted: &[Scored], cursor: Option<Cursor>, page_size: usize) -> 
         Some(last) if start + page.len() < sorted.len() => Some(Cursor {
             score: last.score,
             asset_id: last.asset_id,
+            query_hash,
         }),
         _ => None,
     };
@@ -93,11 +116,12 @@ mod tests {
 
     #[test]
     fn cursor_round_trip() {
-        let c = Cursor { score: 0.123_456_79, asset_id: id(42) };
+        let c = Cursor { score: 0.123_456_79, asset_id: id(42), query_hash: 0xdead_beef_cafe_0001 };
         let back = Cursor::decode(&c.encode()).expect("decode");
         assert_eq!(c, back);
         // Bits exacts → pas de dérive de score.
         assert_eq!(c.score.to_bits(), back.score.to_bits());
+        assert_eq!(c.query_hash, back.query_hash);
     }
 
     #[test]
@@ -105,6 +129,8 @@ mod tests {
         assert!(Cursor::decode("not-hex!").is_none());
         assert!(Cursor::decode("zz").is_none());
         assert!(Cursor::decode(&to_hex(b"no-colon-here")).is_none());
+        // Ancien format à 2 champs (sans query_hash) → rejeté.
+        assert!(Cursor::decode(&to_hex(b"3f800000:00000000000000000000000000000001")).is_none());
     }
 
     #[test]
@@ -117,7 +143,7 @@ mod tests {
         let mut seen = Vec::new();
         let mut cur: Option<Cursor> = None;
         loop {
-            let (page, next) = paginate(&sorted, cur, 3);
+            let (page, next) = paginate(&sorted, cur, 3, 0);
             seen.extend(page.iter().map(|s| s.asset_id));
             match next {
                 Some(c) => cur = Some(c),
@@ -134,9 +160,9 @@ mod tests {
         let sorted: Vec<Scored> = (0..5)
             .map(|i| Scored { asset_id: id(i as u128), score: 0.5 })
             .collect();
-        let (p1, next) = paginate(&sorted, None, 2);
+        let (p1, next) = paginate(&sorted, None, 2, 0);
         assert_eq!(p1.iter().map(|s| s.asset_id).collect::<Vec<_>>(), vec![id(0), id(1)]);
-        let (p2, _) = paginate(&sorted, next, 2);
+        let (p2, _) = paginate(&sorted, next, 2, 0);
         assert_eq!(p2.iter().map(|s| s.asset_id).collect::<Vec<_>>(), vec![id(2), id(3)]);
     }
 
@@ -145,7 +171,7 @@ mod tests {
         let sorted: Vec<Scored> = (0..2)
             .map(|i| Scored { asset_id: id(i as u128), score: 1.0 - i as f32 })
             .collect();
-        let (_page, next) = paginate(&sorted, None, 10);
+        let (_page, next) = paginate(&sorted, None, 10, 0);
         assert!(next.is_none());
     }
 }
