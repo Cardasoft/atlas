@@ -4,6 +4,7 @@
 //! (SQL) arrivent quand PostgreSQL est branché ; ici un stub en mémoire valide le flux.
 
 pub mod cursor;
+pub mod eval;
 pub mod rrf;
 pub mod understanding;
 
