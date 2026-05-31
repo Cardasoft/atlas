@@ -86,6 +86,27 @@ paths:
         "204": { description: Enregistrée }
         "400": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+  /search/suggest:
+    get:
+      tags: [search]
+      operationId: suggest
+      summary: Autocomplétion par préfixe sur les titres d'assets (doc 25 §5)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: "Préfixe à compléter (vide → aucune suggestion)"
+        - name: limit
+          in: query
+          schema: { type: integer, default: 8, maximum: 20 }
+      responses:
+        "200":
+          description: Suggestions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Suggestions" }
+        "500": { $ref: "#/components/responses/Problem" }
   /searches:
     get:
       tags: [saved-search]
@@ -264,6 +285,13 @@ components:
         value: { type: string }
         count: { type: integer, format: int64, minimum: 0 }
       required: [value, count]
+    Suggestions:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items: { type: string }
+      required: [suggestions]
     FacetConfig:
       type: object
       properties:

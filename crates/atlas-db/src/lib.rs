@@ -12,6 +12,7 @@ pub mod facet_config;
 pub mod repo;
 pub mod saved;
 pub mod search_pg;
+pub mod suggest;
 pub mod vector;
 
 #[derive(Debug, thiserror::Error)]
