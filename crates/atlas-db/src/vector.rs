@@ -70,6 +70,58 @@ impl Db {
         tx.commit().await?;
         Ok(ids)
     }
+
+    /// kNN « par l'exemple » (doc 25 §4.2) : réutilise le vecteur **stocké** de l'asset
+    /// source (aucun calcul d'embedding), exclut la source elle-même des résultats.
+    /// Borné par la RLS du tenant + filtres ; renvoie vide si la source n'a pas d'embedding.
+    pub async fn vector_search_by_example(
+        &self,
+        tenant: Uuid,
+        example_asset_id: Uuid,
+        filter: &StructuredFilter,
+        k: i64,
+    ) -> Result<Vec<Uuid>, DbError> {
+        let orientation = filter.orientation.clone();
+        let rights = filter.rights_status.clone();
+        let has_people = filter.has_people;
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let rows = sqlx::query(
+            r#"
+            WITH src AS (
+                SELECT vec FROM embedding
+                WHERE asset_id = $1 AND kind = 'multimodal'
+            )
+            SELECT e.asset_id
+            FROM embedding e
+            JOIN asset a ON a.id = e.asset_id
+            WHERE e.kind = 'multimodal'
+              AND e.asset_id <> $1
+              AND EXISTS (SELECT 1 FROM src)
+              AND ($2::bool IS NULL OR a.has_people = $2)
+              AND ($3::text IS NULL OR a.orientation = $3)
+              AND ($4::text IS NULL OR a.rights_status = $4)
+            ORDER BY e.vec <=> (SELECT vec FROM src)
+            LIMIT $5
+            "#,
+        )
+        .bind(example_asset_id)
+        .bind(has_people)
+        .bind(orientation)
+        .bind(rights)
+        .bind(k)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let ids = rows.iter().map(|r| r.get::<Uuid, _>("asset_id")).collect();
+        tx.commit().await?;
+        Ok(ids)
+    }
 }
 
 #[cfg(test)]

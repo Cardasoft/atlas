@@ -35,6 +35,14 @@ pub struct AuthCtx {
 #[async_trait]
 pub trait VectorIndex: Send + Sync {
     async fn knn(&self, query: &str, k: usize, f: &StructuredFilter, ctx: &AuthCtx) -> Vec<Uuid>;
+    /// kNN par l'exemple (doc 25 §4.2) : réutilise l'embedding de l'asset source.
+    async fn knn_by_example(
+        &self,
+        example_asset_id: Uuid,
+        k: usize,
+        f: &StructuredFilter,
+        ctx: &AuthCtx,
+    ) -> Vec<Uuid>;
 }
 #[async_trait]
 pub trait LexicalIndex: Send + Sync {
@@ -105,14 +113,15 @@ pub struct SearchState {
 }
 
 /// Mode de recherche (doc 25 §4.1). `lexical` saute la voie vectorielle (filtres explicites,
-/// pas d'understanding LLM). `example` (par l'exemple) viendra avec la réutilisation
-/// d'embedding de l'asset source (dépend de la DB).
+/// pas d'understanding LLM). `example` (par l'exemple) réutilise l'embedding stocké de
+/// l'asset source (`example_asset_id`) au lieu d'encoder un texte de requête (§4.2).
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     #[default]
     Natural,
     Lexical,
+    Example,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +129,9 @@ pub struct SearchRequest {
     pub query: String,
     #[serde(default)]
     pub mode: Mode,
+    /// Asset source pour `mode:"example"` (doc 25 §4.2). Ignoré dans les autres modes.
+    #[serde(default)]
+    pub example_asset_id: Option<Uuid>,
     /// Filtres explicites : priment sur les filtres déduits (interpreted_query éditable, §4.1).
     #[serde(default)]
     pub filters: Option<StructuredFilter>,
@@ -193,16 +205,24 @@ async fn search_handler(
     let k = (page_size * 4).max(50); // sur-récupération avant fusion
 
     // Voies lancées « en parallèle » (ici séquentiel sur le stub ; tokio::join! en prod).
-    // En mode lexical, on saute volontairement la voie vectorielle (§4.1).
+    // Lexical : saute le vectoriel (§4.1). Example : réutilise l'embedding source (§4.2).
     let v = match req.mode {
         Mode::Lexical => Vec::new(),
         Mode::Natural => st.vector.knn(&iq.semantic_text, k, &iq.filters, &ctx).await,
+        Mode::Example => match req.example_asset_id {
+            Some(src) => st.vector.knn_by_example(src, k, &iq.filters, &ctx).await,
+            None => Vec::new(), // example sans asset source : aucune voie vectorielle possible
+        },
     };
-    let l = st.lexical.search(&iq.semantic_text, k, &iq.filters, &ctx).await;
+    // En mode example (par l'image), la voie lexicale n'a pas de sens : vectoriel seul.
+    let l = match req.mode {
+        Mode::Example => Vec::new(),
+        _ => st.lexical.search(&iq.semantic_text, k, &iq.filters, &ctx).await,
+    };
     // Facettes : comptages sur l'ensemble autorisé, même clause de permission (§4.5).
     let facets = st.facets.facets(&iq.filters, &ctx).await;
-    // Dégradé = vectoriel attendu mais indisponible (pas le cas du lexical explicite, §4.7).
-    let degraded = matches!(req.mode, Mode::Natural) && v.is_empty();
+    // Dégradé = vectoriel attendu (natural/example) mais indisponible (pas le cas du lexical, §4.7).
+    let degraded = matches!(req.mode, Mode::Natural | Mode::Example) && v.is_empty();
 
     let to_ranked = |ids: &[Uuid]| {
         ids.iter()
@@ -264,6 +284,16 @@ pub struct InMemoryIndex {
 impl VectorIndex for InMemoryIndex {
     async fn knn(&self, _q: &str, k: usize, _f: &StructuredFilter, _c: &AuthCtx) -> Vec<Uuid> {
         self.ids.iter().take(k).copied().collect()
+    }
+    async fn knn_by_example(
+        &self,
+        example_asset_id: Uuid,
+        k: usize,
+        _f: &StructuredFilter,
+        _c: &AuthCtx,
+    ) -> Vec<Uuid> {
+        // Stub : « voisins » = tous les ids sauf la source (l'ordre n'a pas de sens ici).
+        self.ids.iter().filter(|&&id| id != example_asset_id).take(k).copied().collect()
     }
 }
 #[async_trait]
@@ -377,6 +407,7 @@ mod tests {
         SearchRequest {
             query: query.into(),
             mode: Mode::Natural,
+            example_asset_id: None,
             filters: None,
             page_size: 50,
             cursor: None,
@@ -521,5 +552,35 @@ mod tests {
     fn query_hash_is_stable_and_normalized() {
         assert_eq!(query_hash("Plage "), query_hash("plage"));
         assert_ne!(query_hash("plage"), query_hash("montagne"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn example_mode_uses_source_embedding_and_excludes_source() {
+        let ids: Vec<Uuid> = (1..=4).map(Uuid::from_u128).collect();
+        let src = ids[0];
+        let resp = search_handler(
+            State(state_with(ids.clone())),
+            Json(SearchRequest {
+                mode: Mode::Example,
+                example_asset_id: Some(src),
+                ..req("")
+            }),
+        )
+        .await;
+        // Par l'exemple : des voisins reviennent, et la source est exclue des résultats.
+        assert!(!resp.0.results.is_empty());
+        assert!(resp.0.results.iter().all(|r| r.asset_id != src), "la source ne doit pas figurer");
+        assert!(!resp.0.degraded);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn example_mode_without_source_is_degraded_and_empty() {
+        let resp = search_handler(
+            State(state_with((1..=3).map(Uuid::from_u128).collect())),
+            Json(SearchRequest { mode: Mode::Example, example_asset_id: None, ..req("") }),
+        )
+        .await;
+        assert!(resp.0.results.is_empty());
+        assert!(resp.0.degraded, "example sans asset source → dégradé");
     }
 }

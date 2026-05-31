@@ -216,7 +216,12 @@ components:
       required: [query]
       properties:
         query: { type: string }
-        mode: { type: string, enum: [natural, lexical], default: natural }
+        mode: { type: string, enum: [natural, lexical, example], default: natural }
+        example_asset_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Asset source pour mode:example (doc 25 §4.2)"
         filters:
           allOf: [ { $ref: "#/components/schemas/StructuredFilter" } ]
           nullable: true

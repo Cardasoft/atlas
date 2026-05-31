@@ -185,6 +185,17 @@ mod tests {
         db.put_facet_config(tenant, "tenant", r#"["mime"]"#).await.unwrap();
         let fields = db.facet_config_fields(tenant, "tenant").await.unwrap();
         assert_eq!(fields, vec!["mime".to_string()]);
+
+        // Recherche par l'exemple (doc 25 §4.2) : un 2e asset embarqué doit être retrouvé
+        // depuis l'embedding de `a`, et `a` lui-même exclu des résultats.
+        let b = db
+            .insert_asset(tenant, "Autre plage", "image/jpeg", "READY", "valid", Some("landscape"), Some(false))
+            .await
+            .unwrap();
+        db.upsert_embedding(tenant, b, "fake", &emb.encode("plage")).await.unwrap();
+        let by_ex = db.vector_search_by_example(tenant, a, &filter, 10).await.unwrap();
+        assert!(by_ex.contains(&b), "par l'exemple doit retrouver le voisin");
+        assert!(!by_ex.contains(&a), "la source doit être exclue");
     }
 
     #[tokio::test]

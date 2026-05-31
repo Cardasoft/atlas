@@ -65,6 +65,27 @@ impl VectorIndex for PgVectorIndex {
             }
         }
     }
+
+    async fn knn_by_example(
+        &self,
+        example_asset_id: Uuid,
+        k: usize,
+        f: &StructuredFilter,
+        ctx: &AuthCtx,
+    ) -> Vec<Uuid> {
+        // Réutilise le vecteur stocké de l'asset source (aucun encodage), doc 25 §4.2.
+        match self
+            .db
+            .vector_search_by_example(ctx.tenant_id, example_asset_id, f, k as i64)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(error = %e, "vector_search_by_example a échoué");
+                Vec::new()
+            }
+        }
+    }
 }
 
 /// Catalogue d'assets adossé à PostgreSQL : hydrate les résultats (titre, droits) sous RLS.
