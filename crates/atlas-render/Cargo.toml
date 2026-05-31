@@ -1,0 +1,9 @@
+[package]
+name = "atlas-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Renditions & crop (doc 06/34). Géométrie pure testée ; libvips/FFmpeg derrière un trait."
+
+[dependencies]
+thiserror = { workspace = true }

@@ -1,0 +1,32 @@
+# cargo-deny — gouvernance open-source (doc 02 §12).
+# Liste blanche de licences permissives ; tout le reste casse la CI.
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+# Copyleft fort (AGPL/GPL) : non autorisé dans les dépendances liées.
+# Les composants AGPL/LGPL externes (FFmpeg, SeaweedFS…) sont des binaires/services
+# isolés, hors graphe Cargo — voir doc 02 §3.6.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Builds hermétiques : seules les sources connues (crates.io vendoré) sont admises.

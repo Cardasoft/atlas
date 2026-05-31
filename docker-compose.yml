@@ -1,0 +1,51 @@
+# Atlas DAM — édition Solo (doc 23 §3.1). Profil frugal, sans GPU.
+# Tous les composants sont open-source et auto-hébergés (zéro dépendance externe).
+services:
+  postgres:
+    image: pgvector/pgvector:pg16   # Postgres + pgvector (recherche, doc 25)
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+      POSTGRES_DB: atlas
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro   # 0001_init.sql appliqué au 1er démarrage
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2-alpine     # NATS JetStream (files/événements, doc 02/28)
+    command: ["-js"]
+    ports: ["4222:4222"]
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest   # stockage objet S3-compatible (doc 02/23)
+    command: "server -s3 -dir=/data"
+    ports: ["8333:8333"]
+    volumes:
+      - seaweed:/data
+
+  atlas-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ATLAS_BIND: "0.0.0.0:8080"
+      ATLAS_DATABASE_URL: "postgres://atlas:atlas@postgres:5432/atlas"
+      ATLAS_NATS_URL: "nats://nats:4222"
+      ATLAS_EDITION: "solo"
+      # ATLAS_ALLOW_EXTERNAL_LLM non défini → IA locale uniquement (souverain).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    ports: ["8080:8080"]
+
+volumes:
+  pgdata:
+  seaweed:

@@ -1,0 +1,40 @@
+name: ci
+# CI hermétique (doc 02 §12 / doc 24 DoD) : format, lint, tests, licences, build offline, air-gap.
+on:
+  push: { branches: [main] }
+  pull_request: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_OFFLINE: "true"   # build hermétique : pas de pull réseau (deps vendorées)
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --all --locked
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-deny (liste blanche de licences)
+        run: cargo deny check licenses bans sources advisories
+
+  airgap:
+    # Vérifie que le produit construit et démarre SANS réseau (hors API LLM optionnelle).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build offline
+        run: cargo build --release --locked --offline
+      - name: Test de démarrage air-gap
+        run: ./scripts/airgap-test.sh

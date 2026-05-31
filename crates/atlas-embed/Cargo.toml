@@ -1,0 +1,15 @@
+[package]
+name = "atlas-embed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Encodage d'embeddings (M1 : encodeur factice déterministe ; SigLIP via ort/Candle ensuite)."
+
+[features]
+# `ml` active l'encodeur réel SigLIP via ONNX Runtime (poids mirrorés en interne).
+# Désactivé par défaut → build hermétique/frugal, tests sans modèle.
+default = []
+ml = []  # M1 : drapeau seul ; la dépendance `ort` + modèle s'ajoutent à l'implémentation réelle.
+
+[dependencies]
+# Aucune dépendance externe pour l'encodeur factice (souverain, frugal).

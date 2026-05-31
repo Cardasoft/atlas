@@ -1,0 +1,44 @@
+# Atlas DAM — workspace Cargo (M0 fondations)
+# Invariants : Rust socle · open-source · zéro dépendance externe runtime (hors LLM) · frugalité.
+[workspace]
+resolver = "2"
+members = [
+    "crates/atlas-types",
+    "crates/atlas-config",
+    "crates/atlas-embed",
+    "crates/atlas-search",
+    "crates/atlas-ingest",
+    "crates/atlas-store",
+    "crates/atlas-render",
+    "crates/atlas-bus",
+    "crates/atlas-realtime",
+    "crates/atlas-db",
+    "crates/atlas-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.78"
+authors = ["Atlas DAM"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+sha2 = "0.10"
+# sqlx sans TLS (Postgres local/interne) ni macros (pas de DB au build) → build hermétique.
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

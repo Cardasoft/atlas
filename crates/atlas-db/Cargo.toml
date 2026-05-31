@@ -1,0 +1,18 @@
+[package]
+name = "atlas-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Accès PostgreSQL (pool sqlx), RLS multi-tenant, implémentations d'index (FTS)."
+
+[dependencies]
+atlas-search = { path = "../atlas-search" }
+atlas-embed = { path = "../atlas-embed" }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

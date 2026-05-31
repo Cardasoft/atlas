@@ -1,0 +1,100 @@
+//! Endpoint d'ingestion `POST /v1/assets` (doc 26 / doc 22).
+//! Orchestration M1 : prepare (pur) → persistance (asset, search_text, embedding) →
+//! l'asset est immédiatement cherchable. Disponible uniquement si PostgreSQL est branché.
+
+use atlas_embed::Embedder;
+use atlas_ingest::prepare::{prepare, IngestInput};
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::sync::Arc;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct AssetsState {
+    pub db: atlas_db::Db,
+    pub embedder: Arc<dyn Embedder>,
+    pub hub: atlas_realtime::Hub,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAssetRequest {
+    pub title: String,
+    #[serde(default = "default_mime")]
+    pub mime: String,
+    /// Texte à indexer (description/OCR/transcription). Sert aussi à l'empreinte de contenu (M1).
+    #[serde(default)]
+    pub text: String,
+}
+fn default_mime() -> String {
+    "application/octet-stream".into()
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateAssetResponse {
+    pub id: Uuid,
+    pub status: String,
+    pub content_sha256: String,
+}
+
+pub fn routes(state: AssetsState) -> Router {
+    Router::new()
+        .route("/assets", post(create_asset))
+        .with_state(state)
+}
+
+async fn create_asset(
+    State(st): State<AssetsState>,
+    Json(req): Json<CreateAssetRequest>,
+) -> Result<(StatusCode, Json<CreateAssetResponse>), (StatusCode, Json<Value>)> {
+    // M1 : tenant fixe (résolu depuis le jeton à terme, doc 38).
+    let tenant = Uuid::nil();
+
+    let input = IngestInput {
+        title: &req.title,
+        mime: &req.mime,
+        text: &req.text,
+        bytes: req.text.as_bytes(), // M1 : empreinte sur le texte ; binaire média ensuite.
+        luma_8x8: None,
+    };
+    let prepared = prepare(&input, st.embedder.as_ref());
+
+    let id = st
+        .db
+        .insert_asset(tenant, &req.title, &req.mime, prepared.status, "none", None, None)
+        .await
+        .map_err(internal)?;
+    st.db
+        .upsert_search_text(tenant, id, "simple", &prepared.search_text)
+        .await
+        .map_err(internal)?;
+    st.db
+        .upsert_embedding(tenant, id, "fake", &prepared.embedding)
+        .await
+        .map_err(internal)?;
+
+    // Temps réel : notifie les UI abonnées (canaux "ingest" et "asset:{id}"), doc 40.
+    let payload = json!({ "id": id, "status": prepared.status, "title": req.title });
+    st.hub.publish("ingest", "asset.ingested", payload.clone());
+    st.hub.publish(format!("asset:{id}"), "asset.ingested", payload);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateAssetResponse {
+            id,
+            status: prepared.status.to_string(),
+            content_sha256: prepared.content_sha256,
+        }),
+    ))
+}
+
+fn internal(e: atlas_db::DbError) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "type": "https://atlas.local/errors/internal",
+            "title": "Erreur interne",
+            "detail": e.to_string()
+        })),
+    )
+}

@@ -1,0 +1,30 @@
+[package]
+name = "atlas-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Service Core API d'Atlas (M0) : gateway minimal, health, OpenAPI servi localement."
+
+[[bin]]
+name = "atlas-core"
+path = "src/main.rs"
+
+[dependencies]
+atlas-types = { path = "../atlas-types" }
+atlas-config = { path = "../atlas-config" }
+atlas-search = { path = "../atlas-search" }
+atlas-embed = { path = "../atlas-embed" }
+atlas-ingest = { path = "../atlas-ingest" }
+atlas-realtime = { path = "../atlas-realtime" }
+atlas-db = { path = "../atlas-db" }
+uuid = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

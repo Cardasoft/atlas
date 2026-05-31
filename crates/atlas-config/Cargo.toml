@@ -1,0 +1,10 @@
+[package]
+name = "atlas-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Chargement de configuration souverain (env), sans dépendance externe."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }

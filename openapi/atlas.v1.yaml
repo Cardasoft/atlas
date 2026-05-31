@@ -1,0 +1,160 @@
+openapi: 3.1.0
+info:
+  title: Atlas DAM API
+  version: "1.0"
+  description: >
+    API-first DAM (doc 22). Source de vérité unique : UI (WASM), SDK, CLI et
+    serveur MCP sont générés/dérivés de ce contrat. Servi localement (/openapi.json),
+    zéro dépendance externe.
+  license:
+    name: Apache-2.0
+servers:
+  - url: /v1
+tags:
+  - name: system
+  - name: assets
+  - name: search
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: healthz
+      summary: Liveness
+      responses:
+        "200": { description: ok }
+  /readyz:
+    get:
+      tags: [system]
+      operationId: readyz
+      summary: Readiness
+      responses:
+        "200": { description: ready }
+  /version:
+    get:
+      tags: [system]
+      operationId: version
+      responses:
+        "200":
+          description: Infos de version
+          content:
+            application/json:
+              schema: { type: object }
+  /search:
+    post:
+      tags: [search]
+      operationId: search
+      summary: Recherche hybride conversationnelle (doc 04/25)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchRequest" }
+      responses:
+        "200":
+          description: Résultats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /assets:
+    post:
+      tags: [assets]
+      operationId: createAsset
+      summary: "Ingérer un asset (M1 : métadonnées + texte ; binaire média ensuite)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAssetRequest" }
+      responses:
+        "201":
+          description: Asset créé et indexé
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateAssetResponse" }
+        "500": { $ref: "#/components/responses/Problem" }
+  /assets/{id}:
+    get:
+      tags: [assets]
+      operationId: getAsset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Asset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+components:
+  responses:
+    Problem:
+      description: Erreur (RFC 9457)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    AssetStatus:
+      type: string
+      enum: [UPLOADING, INGESTING, READY, IN_REVIEW, APPROVED, PUBLISHED, ARCHIVED, EXPIRED]
+    RightsStatus:
+      type: string
+      enum: [valid, expiring, expired, none]
+    Asset:
+      type: object
+      required: [id, tenant_id, status, rights_status]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        title: { type: string, nullable: true }
+        mime: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/AssetStatus" }
+        rights_status: { $ref: "#/components/schemas/RightsStatus" }
+    CreateAssetRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        mime: { type: string, default: application/octet-stream }
+        text: { type: string, description: "Texte à indexer (description/OCR/transcription)" }
+    CreateAssetResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/AssetStatus" }
+        content_sha256: { type: string }
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string }
+        mode: { type: string, enum: [natural, lexical, example], default: natural }
+        page_size: { type: integer, default: 50, maximum: 200 }
+        cursor: { type: string, nullable: true }
+    SearchResultItem:
+      type: object
+      properties:
+        asset_id: { type: string, format: uuid }
+        score: { type: number }
+        title: { type: string }
+        rights_status: { $ref: "#/components/schemas/RightsStatus" }
+    SearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResultItem" }
+        next_cursor: { type: string, nullable: true }
+        degraded: { type: boolean }
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        trace_id: { type: string }
