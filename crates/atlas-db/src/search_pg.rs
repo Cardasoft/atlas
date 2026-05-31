@@ -18,6 +18,8 @@ use crate::Db;
 const DEFAULT_LANG: &str = "simple";
 /// Top-N borné par facette (doc 25 §4.5, `GROUP BY` borné).
 const FACET_TOP_N: i64 = 20;
+/// Périmètre de facettes par défaut en M1 (rôle/espace/portail à venir, doc 38).
+const DEFAULT_FACET_SCOPE: &str = "tenant";
 
 /// Index lexical adossé à PostgreSQL FTS.
 pub struct PgLexicalIndex {
@@ -97,23 +99,42 @@ pub struct PgFacets {
 #[async_trait]
 impl FacetProvider for PgFacets {
     async fn facets(&self, _f: &StructuredFilter, ctx: &AuthCtx) -> Facets {
-        match self.db.facet_counts(ctx.tenant_id, FACET_TOP_N).await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|(facet, vals)| {
-                    let counts = vals
-                        .into_iter()
-                        .map(|(value, count)| FacetCount { value, count: count.max(0) as u64 })
-                        .collect();
-                    (facet, counts)
-                })
-                .collect(),
+        let rows = match self.db.facet_counts(ctx.tenant_id, FACET_TOP_N).await {
+            Ok(rows) => rows,
             Err(e) => {
                 // Dégradation gracieuse : pas de facettes plutôt qu'échec de la recherche.
                 tracing::warn!(error = %e, "facet_counts a échoué");
-                Facets::new()
+                return Facets::new();
+            }
+        };
+
+        let to_counts = |vals: Vec<(String, i64)>| -> Vec<FacetCount> {
+            vals.into_iter()
+                .map(|(value, count)| FacetCount { value, count: count.max(0) as u64 })
+                .collect()
+        };
+
+        // Config de facettes du périmètre : restreint les facettes restituées à la liste
+        // configurée (l'ordre d'un objet JSON n'est pas significatif → seul le filtrage l'est).
+        // Absente (ou en erreur) → on expose toutes les facettes calculées (défaut, §4.5).
+        let fields = self
+            .db
+            .facet_config_fields(ctx.tenant_id, DEFAULT_FACET_SCOPE)
+            .await
+            .unwrap_or_default();
+
+        if fields.is_empty() {
+            return rows.into_iter().map(|(f, v)| (f, to_counts(v))).collect();
+        }
+
+        let mut computed: HashMap<String, Vec<(String, i64)>> = rows.into_iter().collect();
+        let mut out = Facets::new();
+        for field in fields {
+            if let Some(vals) = computed.remove(&field) {
+                out.insert(field, to_counts(vals));
             }
         }
+        out
     }
 }
 

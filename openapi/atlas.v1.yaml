@@ -57,6 +57,35 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SearchResponse" }
         "422": { $ref: "#/components/responses/Problem" }
+  /search/facet-config:
+    get:
+      tags: [search]
+      operationId: getFacetConfig
+      summary: Configuration des facettes d'un périmètre (doc 25 §4.5)
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, default: tenant }
+      responses:
+        "200":
+          description: Configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacetConfig" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [search]
+      operationId: putFacetConfig
+      summary: Définir la liste de facettes calculées pour un périmètre
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacetConfig" }
+      responses:
+        "204": { description: Enregistrée }
+        "400": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
   /searches:
     get:
       tags: [saved-search]
@@ -230,6 +259,15 @@ components:
         value: { type: string }
         count: { type: integer, format: int64, minimum: 0 }
       required: [value, count]
+    FacetConfig:
+      type: object
+      properties:
+        scope: { type: string, default: tenant }
+        facets:
+          type: array
+          items: { type: string }
+          description: "Liste ordonnée de champs de facette (restreint les facettes calculées)"
+      required: [facets]
     CreateSavedSearchRequest:
       type: object
       properties:

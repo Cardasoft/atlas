@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 mod assets;
+mod facet_config;
 mod searches;
 
 /// État des routes système (readiness dépend de la DB si présente).
@@ -80,7 +81,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 hub: hub.clone(),
             })
             // Recherches enregistrées : disponibles avec la DB (doc 25 §3.2).
-            .merge(searches::routes(searches::SearchesState { db: db.clone() }));
+            .merge(searches::routes(searches::SearchesState { db: db.clone() }))
+            // Configuration des facettes : pilote les facettes calculées (doc 25 §4.5).
+            .merge(facet_config::routes(facet_config::FacetConfigState { db: db.clone() }));
             (search_state, Some(ingest))
         }
         None => {

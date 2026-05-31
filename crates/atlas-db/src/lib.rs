@@ -8,6 +8,7 @@ use sqlx::Row;
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod facet_config;
 pub mod repo;
 pub mod saved;
 pub mod search_pg;

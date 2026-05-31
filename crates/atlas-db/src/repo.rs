@@ -180,6 +180,11 @@ mod tests {
         let facets = db.facet_counts(tenant, 20).await.unwrap();
         let (_, orient) = facets.iter().find(|(name, _)| name == "orientation").expect("facette orientation");
         assert!(orient.iter().any(|(v, c)| v == "landscape" && *c >= 1));
+
+        // facet_config : restreindre aux seules facettes configurées (doc 25 §4.5).
+        db.put_facet_config(tenant, "tenant", r#"["mime"]"#).await.unwrap();
+        let fields = db.facet_config_fields(tenant, "tenant").await.unwrap();
+        assert_eq!(fields, vec!["mime".to_string()]);
     }
 
     #[tokio::test]
