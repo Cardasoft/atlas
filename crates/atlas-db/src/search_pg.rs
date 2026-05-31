@@ -6,7 +6,8 @@
 use async_trait::async_trait;
 use atlas_embed::Embedder;
 use atlas_search::{
-    understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, LexicalIndex, VectorIndex,
+    understanding::StructuredFilter, AssetCatalog, AssetSummary, AuthCtx, FacetCount, FacetProvider,
+    Facets, LexicalIndex, VectorIndex,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use uuid::Uuid;
 use crate::Db;
 
 const DEFAULT_LANG: &str = "simple";
+/// Top-N borné par facette (doc 25 §4.5, `GROUP BY` borné).
+const FACET_TOP_N: i64 = 20;
 
 /// Index lexical adossé à PostgreSQL FTS.
 pub struct PgLexicalIndex {
@@ -81,6 +84,34 @@ impl AssetCatalog for PgAssetCatalog {
                 // Dégradation gracieuse : résultats sans métadonnées plutôt qu'échec total.
                 tracing::warn!(error = %e, "asset_summaries a échoué");
                 HashMap::new()
+            }
+        }
+    }
+}
+
+/// Fournisseur de facettes adossé à PostgreSQL : agrège sur l'ensemble autorisé sous RLS.
+pub struct PgFacets {
+    pub db: Db,
+}
+
+#[async_trait]
+impl FacetProvider for PgFacets {
+    async fn facets(&self, _f: &StructuredFilter, ctx: &AuthCtx) -> Facets {
+        match self.db.facet_counts(ctx.tenant_id, FACET_TOP_N).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(facet, vals)| {
+                    let counts = vals
+                        .into_iter()
+                        .map(|(value, count)| FacetCount { value, count: count.max(0) as u64 })
+                        .collect();
+                    (facet, counts)
+                })
+                .collect(),
+            Err(e) => {
+                // Dégradation gracieuse : pas de facettes plutôt qu'échec de la recherche.
+                tracing::warn!(error = %e, "facet_counts a échoué");
+                Facets::new()
             }
         }
     }

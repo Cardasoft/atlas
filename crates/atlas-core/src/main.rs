@@ -69,6 +69,7 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 }),
                 lexical: Arc::new(atlas_db::search_pg::PgLexicalIndex { db: db.clone() }),
                 catalog: Arc::new(atlas_db::search_pg::PgAssetCatalog { db: db.clone() }),
+                facets: Arc::new(atlas_db::search_pg::PgFacets { db: db.clone() }),
                 weights: atlas_search::rrf::Weights::default(),
             };
             let ingest = assets::routes(assets::AssetsState {
@@ -84,6 +85,7 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 vector: idx.clone(),
                 lexical: idx,
                 catalog: Arc::new(atlas_search::NoopCatalog),
+                facets: Arc::new(atlas_search::NoopFacets),
                 weights: atlas_search::rrf::Weights::default(),
             };
             (search_state, None) // ingestion indisponible sans DB

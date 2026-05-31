@@ -45,12 +45,32 @@ pub trait AssetCatalog: Send + Sync {
     async fn summaries(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary>;
 }
 
-/// État injecté dans le handler (indices + catalogue interchangeables).
+/// Comptage d'une valeur de facette (doc 25 §4.5).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FacetCount {
+    pub value: String,
+    pub count: u64,
+}
+
+/// Agrégations par facette : nom de facette → valeurs ordonnées (top-N borné).
+/// `BTreeMap` pour une sérialisation déterministe (tests/cache stables).
+pub type Facets = std::collections::BTreeMap<String, Vec<FacetCount>>;
+
+/// Comptages de facettes sur l'**ensemble autorisé** (même clause de permission que le
+/// retrieval, doc 25 §4.5). M1 : distribution du catalogue du tenant ; le filtrage par
+/// facette (exclusion de sa propre dimension) viendra avec `facet_config`.
+#[async_trait]
+pub trait FacetProvider: Send + Sync {
+    async fn facets(&self, f: &StructuredFilter, ctx: &AuthCtx) -> Facets;
+}
+
+/// État injecté dans le handler (indices + catalogue + facettes interchangeables).
 #[derive(Clone)]
 pub struct SearchState {
     pub vector: Arc<dyn VectorIndex>,
     pub lexical: Arc<dyn LexicalIndex>,
     pub catalog: Arc<dyn AssetCatalog>,
+    pub facets: Arc<dyn FacetProvider>,
     pub weights: rrf::Weights,
 }
 
@@ -108,6 +128,9 @@ pub struct SearchResultItem {
 pub struct SearchResponse {
     pub results: Vec<SearchResultItem>,
     pub interpreted_query: understanding::InterpretedQuery,
+    /// Agrégations par facette sur l'ensemble autorisé (doc 25 §4.5) ; omis si vide.
+    #[serde(skip_serializing_if = "Facets::is_empty")]
+    pub facets: Facets,
     /// Curseur de la page suivante (doc 25 §4.6) ; absent si plus de résultats.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -145,6 +168,8 @@ async fn search_handler(
         Mode::Natural => st.vector.knn(&iq.semantic_text, k, &iq.filters, &ctx).await,
     };
     let l = st.lexical.search(&iq.semantic_text, k, &iq.filters, &ctx).await;
+    // Facettes : comptages sur l'ensemble autorisé, même clause de permission (§4.5).
+    let facets = st.facets.facets(&iq.filters, &ctx).await;
     // Dégradé = vectoriel attendu mais indisponible (pas le cas du lexical explicite, §4.7).
     let degraded = matches!(req.mode, Mode::Natural) && v.is_empty();
 
@@ -179,6 +204,7 @@ async fn search_handler(
     Json(SearchResponse {
         results,
         interpreted_query: iq,
+        facets,
         next_cursor: next.map(|c| c.encode()),
         degraded,
     })
@@ -212,6 +238,15 @@ impl AssetCatalog for NoopCatalog {
     }
 }
 
+/// Fournisseur de facettes vide (dev/air-gap sans DB) : aucune agrégation.
+pub struct NoopFacets;
+#[async_trait]
+impl FacetProvider for NoopFacets {
+    async fn facets(&self, _f: &StructuredFilter, _ctx: &AuthCtx) -> Facets {
+        Facets::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,16 +267,42 @@ mod tests {
         }
     }
 
+    /// Fournisseur de facettes de test : une distribution fixe d'orientation.
+    struct FakeFacets;
+    #[async_trait]
+    impl FacetProvider for FakeFacets {
+        async fn facets(&self, _f: &StructuredFilter, _ctx: &AuthCtx) -> Facets {
+            let mut m = Facets::new();
+            m.insert(
+                "orientation".into(),
+                vec![
+                    FacetCount { value: "landscape".into(), count: 3 },
+                    FacetCount { value: "portrait".into(), count: 1 },
+                ],
+            );
+            m
+        }
+    }
+
     fn state_with(ids: Vec<Uuid>) -> SearchState {
-        state_with_catalog(ids, Arc::new(NoopCatalog))
+        state_full(ids, Arc::new(NoopCatalog), Arc::new(NoopFacets))
     }
 
     fn state_with_catalog(ids: Vec<Uuid>, catalog: Arc<dyn AssetCatalog>) -> SearchState {
+        state_full(ids, catalog, Arc::new(NoopFacets))
+    }
+
+    fn state_full(
+        ids: Vec<Uuid>,
+        catalog: Arc<dyn AssetCatalog>,
+        facets: Arc<dyn FacetProvider>,
+    ) -> SearchState {
         let idx = Arc::new(InMemoryIndex { ids });
         SearchState {
             vector: idx.clone(),
             lexical: idx,
             catalog,
+            facets,
             weights: rrf::Weights::default(),
         }
     }
@@ -341,5 +402,27 @@ mod tests {
         .await;
         assert!(resp.0.results[0].title.is_none());
         assert!(resp.0.results[0].rights_status.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn facets_are_returned_in_response() {
+        let resp = search_handler(
+            State(state_full(vec![Uuid::from_u128(1)], Arc::new(NoopCatalog), Arc::new(FakeFacets))),
+            Json(req("mer")),
+        )
+        .await;
+        let orient = resp.0.facets.get("orientation").expect("facette orientation présente");
+        assert_eq!(orient[0], FacetCount { value: "landscape".into(), count: 3 });
+        assert_eq!(orient.len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn noop_facets_leave_facets_empty() {
+        let resp = search_handler(
+            State(state_with(vec![Uuid::from_u128(1)])),
+            Json(req("mer")),
+        )
+        .await;
+        assert!(resp.0.facets.is_empty());
     }
 }

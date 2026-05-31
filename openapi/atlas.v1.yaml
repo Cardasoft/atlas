@@ -169,8 +169,20 @@ components:
           type: array
           items: { $ref: "#/components/schemas/SearchResultItem" }
         interpreted_query: { $ref: "#/components/schemas/InterpretedQuery" }
+        facets:
+          type: object
+          description: "Agrégations par facette sur l'ensemble autorisé (doc 25 §4.5) ; omis si vide"
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/FacetCount" }
         next_cursor: { type: string, nullable: true }
         degraded: { type: boolean }
+    FacetCount:
+      type: object
+      properties:
+        value: { type: string }
+        count: { type: integer, format: int64, minimum: 0 }
+      required: [value, count]
     Problem:
       type: object
       properties:

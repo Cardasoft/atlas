@@ -111,4 +111,59 @@ impl Db {
         tx.commit().await?;
         Ok(out)
     }
+
+    /// Comptages de facettes sur l'ensemble autorisé du tenant (doc 25 §4.5).
+    /// `GROUP BY` borné à `top_n` valeurs par facette ; renvoie `(facette, [(valeur, count)])`.
+    /// Les colonnes sont des littéraux figés (aucune interpolation d'entrée → pas d'injection).
+    pub async fn facet_counts(
+        &self,
+        tenant: Uuid,
+        top_n: i64,
+    ) -> Result<Vec<(String, Vec<(String, i64)>)>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let mut out = Vec::new();
+        // Facettes textuelles : orientation, rights_status, mime. Colonnes figées.
+        for (facet, col) in [
+            ("orientation", "orientation"),
+            ("rights_status", "rights_status"),
+            ("mime", "mime"),
+        ] {
+            let sql = format!(
+                "SELECT {col}::text AS v, count(*) AS c FROM asset \
+                 WHERE {col} IS NOT NULL GROUP BY {col} ORDER BY c DESC, v ASC LIMIT $1"
+            );
+            let rows = sqlx::query(&sql).bind(top_n).fetch_all(&mut *tx).await?;
+            let vals = rows
+                .iter()
+                .map(|r| (r.get::<String, _>("v"), r.get::<i64, _>("c")))
+                .collect::<Vec<_>>();
+            if !vals.is_empty() {
+                out.push((facet.to_string(), vals));
+            }
+        }
+
+        // Facette booléenne has_people : valeurs « true »/« false ».
+        let rows = sqlx::query(
+            "SELECT has_people::text AS v, count(*) AS c FROM asset \
+             WHERE has_people IS NOT NULL GROUP BY has_people ORDER BY c DESC, v ASC LIMIT $1",
+        )
+        .bind(top_n)
+        .fetch_all(&mut *tx)
+        .await?;
+        let vals = rows
+            .iter()
+            .map(|r| (r.get::<String, _>("v"), r.get::<i64, _>("c")))
+            .collect::<Vec<_>>();
+        if !vals.is_empty() {
+            out.push(("has_people".to_string(), vals));
+        }
+
+        tx.commit().await?;
+        Ok(out)
+    }
 }

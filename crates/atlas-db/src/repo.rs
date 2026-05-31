@@ -175,6 +175,11 @@ mod tests {
         assert_eq!(*id, a);
         assert_eq!(title.as_deref(), Some("Plage au coucher de soleil"));
         assert_eq!(rights, "valid");
+
+        // Facettes : l'asset « landscape » doit apparaître dans la facette orientation (doc 25 §4.5).
+        let facets = db.facet_counts(tenant, 20).await.unwrap();
+        let (_, orient) = facets.iter().find(|(name, _)| name == "orientation").expect("facette orientation");
+        assert!(orient.iter().any(|(v, c)| v == "landscape" && *c >= 1));
     }
 
     #[tokio::test]
