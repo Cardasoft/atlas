@@ -4,7 +4,9 @@
 //! ensuite par la couche DB. Séparer le pur de l'I/O rend la logique testable sans infra.
 
 use crate::hash::{average_hash, sha256_hex};
+use crate::provenance;
 use atlas_embed::Embedder;
+use atlas_types::Provenance;
 
 /// Entrée d'ingestion (M1 : métadonnées + texte ; le binaire média viendra ensuite).
 pub struct IngestInput<'a> {
@@ -16,6 +18,11 @@ pub struct IngestInput<'a> {
     pub bytes: &'a [u8],
     /// Luminance 8×8 optionnelle pour l'empreinte perceptuelle (images).
     pub luma_8x8: Option<&'a [u8]>,
+    /// Origine IA **déclarée** par l'éditeur (ex. champ d'upload), prioritaire sur la
+    /// détection par marqueurs. `None` → on s'en remet aux marqueurs embarqués (AI Act §50).
+    pub declared_provenance: Option<&'a str>,
+    /// Outil/modèle générateur déclaré, si connu.
+    pub generator: Option<&'a str>,
 }
 
 /// Résultat préparé, prêt à persister.
@@ -26,6 +33,8 @@ pub struct PreparedAsset {
     pub search_text: String,
     pub embedding: Vec<f32>,
     pub status: &'static str,
+    /// Provenance / transparence IA (AI Act art. 50, Content Credentials C2PA).
+    pub provenance: Provenance,
 }
 
 /// Construit l'enregistrement à partir des entrées et de l'encodeur (in-process).
@@ -35,12 +44,15 @@ pub fn prepare(input: &IngestInput, embedder: &dyn Embedder) -> PreparedAsset {
     let search_text = compose(&[input.title, input.text]);
     // L'embedding multimodal est calculé sur le texte indexable (M1 ; image plus tard).
     let embedding = embedder.encode(&search_text);
+    // Provenance : déclaration éditoriale prioritaire, sinon marqueurs C2PA/IPTC des octets.
+    let provenance = provenance::derive(input.bytes, input.declared_provenance, input.generator);
     PreparedAsset {
         content_sha256,
         phash,
         search_text,
         embedding,
         status: "READY",
+        provenance,
     }
 }
 
@@ -66,6 +78,8 @@ mod tests {
             text,
             bytes,
             luma_8x8: None,
+            declared_provenance: None,
+            generator: None,
         }
     }
 
@@ -99,5 +113,23 @@ mod tests {
         let a = prepare(&input("x", "y", b"z"), &FakeEmbedder);
         let b = prepare(&input("x", "y", b"z"), &FakeEmbedder);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn provenance_defaults_to_unknown() {
+        let p = prepare(&input("x", "y", b"photo"), &FakeEmbedder);
+        assert_eq!(p.provenance.ai, atlas_types::AiProvenance::Unknown);
+        assert!(!p.provenance.c2pa_present);
+    }
+
+    #[test]
+    fn declared_provenance_is_recorded() {
+        let mut inp = input("x", "y", b"raw");
+        inp.declared_provenance = Some("ai-generated");
+        inp.generator = Some("Firefly");
+        let p = prepare(&inp, &FakeEmbedder);
+        assert_eq!(p.provenance.ai, atlas_types::AiProvenance::AiGenerated);
+        assert_eq!(p.provenance.generator.as_deref(), Some("Firefly"));
+        assert!(p.provenance.transparency_label().is_some());
     }
 }

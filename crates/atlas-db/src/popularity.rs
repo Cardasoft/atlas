@@ -90,27 +90,57 @@ mod tests {
         let t1 = db.create_tenant("pop1").await.unwrap();
 
         let a1 = db
-            .insert_asset(t1, "Plage", "image/jpeg", "READY", "valid", None, None)
+            .insert_asset(
+                t1,
+                "Plage",
+                "image/jpeg",
+                "READY",
+                "valid",
+                None,
+                None,
+                &atlas_types::Provenance::default(),
+            )
             .await
             .unwrap();
         let a2 = db
-            .insert_asset(t1, "Montagne", "image/jpeg", "READY", "valid", None, None)
+            .insert_asset(
+                t1,
+                "Montagne",
+                "image/jpeg",
+                "READY",
+                "valid",
+                None,
+                None,
+                &atlas_types::Provenance::default(),
+            )
             .await
             .unwrap();
 
         // Deux recherches portant le même hash : le clic vise la plus récente.
         let qh = "deadbeefcafe0001";
-        db.insert_search_log(t1, None, qh, "{}", 2, Some(5), false).await.unwrap();
-        db.insert_search_log(t1, None, qh, "{}", 2, Some(5), false).await.unwrap();
+        db.insert_search_log(t1, None, qh, "{}", 2, Some(5), false)
+            .await
+            .unwrap();
+        db.insert_search_log(t1, None, qh, "{}", 2, Some(5), false)
+            .await
+            .unwrap();
 
-        assert!(db.record_click(t1, qh, a1).await.unwrap(), "clic enregistré");
+        assert!(
+            db.record_click(t1, qh, a1).await.unwrap(),
+            "clic enregistré"
+        );
         assert!(db.record_click(t1, qh, a1).await.unwrap());
         assert!(db.record_click(t1, qh, a2).await.unwrap());
         // Hash inconnu → aucun enregistrement.
         assert!(!db.record_click(t1, "0000000000000000", a1).await.unwrap());
 
         let pop = db.asset_popularity(t1, &[a1, a2]).await.unwrap();
-        let cnt = |id: Uuid| pop.iter().find(|(i, _)| *i == id).map(|(_, c)| *c).unwrap_or(0);
+        let cnt = |id: Uuid| {
+            pop.iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, c)| *c)
+                .unwrap_or(0)
+        };
         assert_eq!(cnt(a1), 2);
         assert_eq!(cnt(a2), 1);
     }

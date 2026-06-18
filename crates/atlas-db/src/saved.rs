@@ -122,19 +122,31 @@ mod tests {
         let owner = Uuid::new_v4();
 
         let id = db
-            .create_saved_search(t1, owner, "Plages", r#"{"query":"plage","mode":"natural"}"#, true)
+            .create_saved_search(
+                t1,
+                owner,
+                "Plages",
+                r#"{"query":"plage","mode":"natural"}"#,
+                true,
+            )
             .await
             .unwrap();
 
         let mine = db.list_saved_searches(t1, owner).await.unwrap();
-        let found = mine.iter().find(|s| s.id == id).expect("recherche présente");
+        let found = mine
+            .iter()
+            .find(|s| s.id == id)
+            .expect("recherche présente");
         assert_eq!(found.name, "Plages");
         assert!(found.notify);
         assert!(found.query.contains("plage"));
 
         // Isolation : t2 ne voit pas la recherche de t1 (RLS).
         let other = db.list_saved_searches(t2, owner).await.unwrap();
-        assert!(!other.iter().any(|s| s.id == id), "fuite inter-tenant : RLS défaillante");
+        assert!(
+            !other.iter().any(|s| s.id == id),
+            "fuite inter-tenant : RLS défaillante"
+        );
 
         // Suppression idempotente.
         assert!(db.delete_saved_search(t1, owner, id).await.unwrap());

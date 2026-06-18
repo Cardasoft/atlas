@@ -8,6 +8,7 @@ description = "Accès PostgreSQL (pool sqlx), RLS multi-tenant, implémentations
 [dependencies]
 atlas-search = { path = "../atlas-search" }
 atlas-embed = { path = "../atlas-embed" }
+atlas-types = { path = "../atlas-types" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }

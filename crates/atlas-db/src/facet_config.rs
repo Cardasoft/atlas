@@ -96,16 +96,27 @@ mod tests {
         let t1 = db.create_tenant("fc-t1").await.unwrap();
         let t2 = db.create_tenant("fc-t2").await.unwrap();
 
-        db.put_facet_config(t1, "tenant", r#"["mime","orientation"]"#).await.unwrap();
+        db.put_facet_config(t1, "tenant", r#"["mime","orientation"]"#)
+            .await
+            .unwrap();
         let fields = db.facet_config_fields(t1, "tenant").await.unwrap();
         assert_eq!(fields, vec!["mime".to_string(), "orientation".to_string()]);
 
         // Upsert : remplace la liste.
-        db.put_facet_config(t1, "tenant", r#"["rights_status"]"#).await.unwrap();
-        assert_eq!(db.facet_config_fields(t1, "tenant").await.unwrap(), vec!["rights_status".to_string()]);
+        db.put_facet_config(t1, "tenant", r#"["rights_status"]"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.facet_config_fields(t1, "tenant").await.unwrap(),
+            vec!["rights_status".to_string()]
+        );
 
         // Isolation : t2 n'a aucune config (RLS).
         assert!(db.get_facet_config(t2, "tenant").await.unwrap().is_none());
-        assert!(db.facet_config_fields(t2, "tenant").await.unwrap().is_empty());
+        assert!(db
+            .facet_config_fields(t2, "tenant")
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

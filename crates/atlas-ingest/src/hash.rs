@@ -99,7 +99,10 @@ mod tests {
             *p = 255;
         }
         let d = hamming(average_hash(&uniform), average_hash(&half));
-        assert!(d > 0, "des images distinctes doivent différer (distance {d})");
+        assert!(
+            d > 0,
+            "des images distinctes doivent différer (distance {d})"
+        );
     }
 
     #[test]

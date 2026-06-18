@@ -51,7 +51,9 @@ async fn suggest(
     let prefix = q.q.trim();
     // Préfixe vide → réponse vide (évite de lister tout le catalogue).
     if prefix.is_empty() {
-        return Ok(Json(Suggestions { suggestions: Vec::new() }));
+        return Ok(Json(Suggestions {
+            suggestions: Vec::new(),
+        }));
     }
     let limit = q.limit.clamp(1, MAX_LIMIT);
     let suggestions = st

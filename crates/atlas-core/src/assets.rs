@@ -28,6 +28,13 @@ pub struct CreateAssetRequest {
     /// Texte à indexer (description/OCR/transcription). Sert aussi à l'empreinte de contenu (M1).
     #[serde(default)]
     pub text: String,
+    /// Origine IA **déclarée** par l'éditeur (« human », « ai_generated », « ai_edited »…).
+    /// Prime sur la détection par marqueurs C2PA/IPTC (AI Act art. 50, transparence).
+    #[serde(default)]
+    pub provenance: Option<String>,
+    /// Outil/modèle générateur déclaré, si connu (ex. « Firefly »).
+    #[serde(default)]
+    pub generator: Option<String>,
 }
 fn default_mime() -> String {
     "application/octet-stream".into()
@@ -38,6 +45,11 @@ pub struct CreateAssetResponse {
     pub id: Uuid,
     pub status: String,
     pub content_sha256: String,
+    /// Provenance / transparence IA retenue pour l'asset (AI Act art. 50).
+    pub provenance: atlas_types::Provenance,
+    /// Libellé de transparence à afficher si le contenu relève de l'IA, sinon `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency_label: Option<&'static str>,
 }
 
 pub fn routes(state: AssetsState) -> Router {
@@ -59,12 +71,23 @@ async fn create_asset(
         text: &req.text,
         bytes: req.text.as_bytes(), // M1 : empreinte sur le texte ; binaire média ensuite.
         luma_8x8: None,
+        declared_provenance: req.provenance.as_deref(),
+        generator: req.generator.as_deref(),
     };
     let prepared = prepare(&input, st.embedder.as_ref());
 
     let id = st
         .db
-        .insert_asset(tenant, &req.title, &req.mime, prepared.status, "none", None, None)
+        .insert_asset(
+            tenant,
+            &req.title,
+            &req.mime,
+            prepared.status,
+            "none",
+            None,
+            None,
+            &prepared.provenance,
+        )
         .await
         .map_err(internal)?;
     st.db
@@ -81,9 +104,19 @@ async fn create_asset(
     st.cache.invalidate_tenant(tenant).await;
 
     // Temps réel : notifie les UI abonnées (canaux "ingest" et "asset:{id}"), doc 40.
-    let payload = json!({ "id": id, "status": prepared.status, "title": req.title });
+    // On transmet la provenance pour que l'UI affiche d'emblée le libellé de transparence.
+    let label = prepared.provenance.transparency_label();
+    let payload = json!({
+        "id": id,
+        "status": prepared.status,
+        "title": req.title,
+        "ai_provenance": prepared.provenance.ai.as_str(),
+        "c2pa_present": prepared.provenance.c2pa_present,
+        "transparency_label": label,
+    });
     st.hub.publish("ingest", "asset.ingested", payload.clone());
-    st.hub.publish(format!("asset:{id}"), "asset.ingested", payload);
+    st.hub
+        .publish(format!("asset:{id}"), "asset.ingested", payload);
 
     Ok((
         StatusCode::CREATED,
@@ -91,6 +124,8 @@ async fn create_asset(
             id,
             status: prepared.status.to_string(),
             content_sha256: prepared.content_sha256,
+            transparency_label: label,
+            provenance: prepared.provenance,
         }),
     ))
 }

@@ -52,7 +52,11 @@ pub fn precision_at_k(ranked: &[Uuid], relevant: &HashSet<Uuid>, k: usize) -> f6
     if k == 0 {
         return 0.0;
     }
-    let hits = ranked.iter().take(k).filter(|id| relevant.contains(id)).count();
+    let hits = ranked
+        .iter()
+        .take(k)
+        .filter(|id| relevant.contains(id))
+        .count();
     hits as f64 / k as f64
 }
 
@@ -61,7 +65,10 @@ pub fn mean_ndcg_at_k(cases: &[(Vec<Uuid>, HashMap<Uuid, f32>)], k: usize) -> f6
     if cases.is_empty() {
         return 0.0;
     }
-    let sum: f64 = cases.iter().map(|(ranked, gains)| ndcg_at_k(ranked, gains, k)).sum();
+    let sum: f64 = cases
+        .iter()
+        .map(|(ranked, gains)| ndcg_at_k(ranked, gains, k))
+        .sum();
     sum / cases.len() as f64
 }
 
@@ -92,7 +99,10 @@ mod tests {
         // IDCG (ordre [a,c]) = 1/log2(2) + 1/log2(3) = 1 + 0.6309298 = 1.6309298
         // nDCG = 1.5 / 1.6309298 = 0.9197208
         let got = ndcg_at_k(&[a, b, c], &gains, 3);
-        assert!((got - 0.9197208).abs() < 1e-6, "nDCG attendu ≈ 0.9197, obtenu {got}");
+        assert!(
+            (got - 0.9197208).abs() < 1e-6,
+            "nDCG attendu ≈ 0.9197, obtenu {got}"
+        );
     }
 
     #[test]
@@ -138,7 +148,10 @@ mod tests {
             (vec![b, a, c], gains.clone()), // imparfait → < 1.0
         ];
         let mean = mean_ndcg_at_k(&cases, 3);
-        assert!(mean > 0.0 && mean < 1.0, "moyenne entre les deux cas, obtenu {mean}");
+        assert!(
+            mean > 0.0 && mean < 1.0,
+            "moyenne entre les deux cas, obtenu {mean}"
+        );
         assert_eq!(mean_ndcg_at_k(&[], 10), 0.0);
     }
 }

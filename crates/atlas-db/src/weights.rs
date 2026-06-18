@@ -83,11 +83,17 @@ mod tests {
         assert!(db.get_search_weights(t1).await.unwrap().is_none());
 
         db.put_search_weights(t1, 2.0, 1.0, 0.5).await.unwrap();
-        assert_eq!(db.get_search_weights(t1).await.unwrap(), Some((2.0, 1.0, 0.5)));
+        assert_eq!(
+            db.get_search_weights(t1).await.unwrap(),
+            Some((2.0, 1.0, 0.5))
+        );
 
         // Upsert : remplace.
         db.put_search_weights(t1, 1.0, 3.0, 0.0).await.unwrap();
-        assert_eq!(db.get_search_weights(t1).await.unwrap(), Some((1.0, 3.0, 0.0)));
+        assert_eq!(
+            db.get_search_weights(t1).await.unwrap(),
+            Some((1.0, 3.0, 0.0))
+        );
 
         // Isolation : t2 reste sans config (RLS).
         assert!(db.get_search_weights(t2).await.unwrap().is_none());

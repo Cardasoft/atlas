@@ -19,7 +19,10 @@ use uuid::Uuid;
 /// + attributs + périmètre. Déterministe et stable : deux contextes identiques ⇒ même empreinte,
 /// deux contextes différents ⇒ empreintes différentes (isolation du cache).
 pub fn auth_fingerprint(ctx: &AuthCtx) -> String {
-    let user = ctx.user_id.map(|u| u.simple().to_string()).unwrap_or_else(|| "-".into());
+    let user = ctx
+        .user_id
+        .map(|u| u.simple().to_string())
+        .unwrap_or_else(|| "-".into());
     format!("t={};u={}", ctx.tenant_id.simple(), user)
 }
 
@@ -37,7 +40,9 @@ pub fn cache_key(
     cursor: Option<&str>,
 ) -> String {
     let q = query.trim().to_lowercase();
-    let example = example_asset_id.map(|e| e.simple().to_string()).unwrap_or_default();
+    let example = example_asset_id
+        .map(|e| e.simple().to_string())
+        .unwrap_or_default();
     let page = cursor.unwrap_or("");
     format!("{fingerprint}|q={q}|m={mode}|ex={example}|f={filters_json}|ps={page_size}|c={page}")
 }
@@ -78,7 +83,10 @@ pub struct InMemoryTtlCache {
 
 impl InMemoryTtlCache {
     pub fn new(ttl: Duration) -> Self {
-        Self { ttl, map: Mutex::new(HashMap::new()) }
+        Self {
+            ttl,
+            map: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -97,7 +105,11 @@ impl SearchCache for InMemoryTtlCache {
     }
 
     async fn put(&self, key: String, tenant: Uuid, value: SearchResponse) {
-        let entry = Entry { expires_at: Instant::now() + self.ttl, tenant, value };
+        let entry = Entry {
+            expires_at: Instant::now() + self.ttl,
+            tenant,
+            value,
+        };
         self.map.lock().unwrap().insert(key, entry);
     }
 
@@ -111,7 +123,10 @@ mod tests {
     use super::*;
 
     fn ctx(tenant: u128, user: Option<u128>) -> AuthCtx {
-        AuthCtx { tenant_id: Uuid::from_u128(tenant), user_id: user.map(Uuid::from_u128) }
+        AuthCtx {
+            tenant_id: Uuid::from_u128(tenant),
+            user_id: user.map(Uuid::from_u128),
+        }
     }
 
     #[test]
@@ -130,7 +145,10 @@ mod tests {
     fn key_isolates_by_fingerprint() {
         let k1 = cache_key("t=1;u=10", "mer", "natural", None, "{}", 50, None);
         let k2 = cache_key("t=1;u=20", "mer", "natural", None, "{}", 50, None);
-        assert_ne!(k1, k2, "deux périmètres ⇒ deux clés (pas de fuite de cache)");
+        assert_ne!(
+            k1, k2,
+            "deux périmètres ⇒ deux clés (pas de fuite de cache)"
+        );
     }
 
     #[test]
@@ -143,10 +161,30 @@ mod tests {
     #[test]
     fn key_discriminates_page_mode_and_filters() {
         let base = cache_key("fp", "mer", "natural", None, "{}", 50, None);
-        assert_ne!(base, cache_key("fp", "mer", "natural", None, "{}", 50, Some("CUR")));
-        assert_ne!(base, cache_key("fp", "mer", "lexical", None, "{}", 50, None));
-        assert_ne!(base, cache_key("fp", "mer", "natural", None, r#"{"orientation":"landscape"}"#, 50, None));
-        assert_ne!(base, cache_key("fp", "mer", "natural", None, "{}", 10, None));
+        assert_ne!(
+            base,
+            cache_key("fp", "mer", "natural", None, "{}", 50, Some("CUR"))
+        );
+        assert_ne!(
+            base,
+            cache_key("fp", "mer", "lexical", None, "{}", 50, None)
+        );
+        assert_ne!(
+            base,
+            cache_key(
+                "fp",
+                "mer",
+                "natural",
+                None,
+                r#"{"orientation":"landscape"}"#,
+                50,
+                None
+            )
+        );
+        assert_ne!(
+            base,
+            cache_key("fp", "mer", "natural", None, "{}", 10, None)
+        );
     }
 
     fn empty_response() -> SearchResponse {
@@ -173,14 +211,23 @@ mod tests {
         cache.put("k2".into(), t2, empty_response()).await;
         cache.invalidate_tenant(t1).await;
         // Le tenant ingéré est purgé ; l'autre périmètre reste servi.
-        assert!(cache.get("k1").await.is_none(), "le tenant purgé devient un miss");
-        assert!(cache.get("k2").await.is_some(), "les autres tenants sont préservés");
+        assert!(
+            cache.get("k1").await.is_none(),
+            "le tenant purgé devient un miss"
+        );
+        assert!(
+            cache.get("k2").await.is_some(),
+            "les autres tenants sont préservés"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn expired_entry_is_a_miss() {
         let cache = InMemoryTtlCache::new(Duration::from_millis(0)); // expire immédiatement
         cache.put("k".into(), Uuid::nil(), empty_response()).await;
-        assert!(cache.get("k").await.is_none(), "entrée expirée → miss (purge paresseuse)");
+        assert!(
+            cache.get("k").await.is_none(),
+            "entrée expirée → miss (purge paresseuse)"
+        );
     }
 }

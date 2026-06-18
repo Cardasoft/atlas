@@ -100,12 +100,24 @@ mod tests {
     fn fusion_prefers_items_ranked_high_in_both() {
         // L'asset 1 est bien classé dans les deux voies → doit dominer.
         let vec_hits = vec![
-            Ranked { asset_id: id(1), rank: 0 },
-            Ranked { asset_id: id(2), rank: 1 },
+            Ranked {
+                asset_id: id(1),
+                rank: 0,
+            },
+            Ranked {
+                asset_id: id(2),
+                rank: 1,
+            },
         ];
         let lex_hits = vec![
-            Ranked { asset_id: id(1), rank: 0 },
-            Ranked { asset_id: id(3), rank: 1 },
+            Ranked {
+                asset_id: id(1),
+                rank: 0,
+            },
+            Ranked {
+                asset_id: id(3),
+                rank: 1,
+            },
         ];
         let out = fuse(&vec_hits, &lex_hits, &Weights::default());
         assert_eq!(out[0].asset_id, id(1));
@@ -116,8 +128,14 @@ mod tests {
     fn fusion_is_stable_for_ties() {
         // Deux assets à égalité de score → ordre déterministe par id (pagination stable).
         let vec_hits = vec![
-            Ranked { asset_id: id(10), rank: 0 },
-            Ranked { asset_id: id(5), rank: 0 },
+            Ranked {
+                asset_id: id(10),
+                rank: 0,
+            },
+            Ranked {
+                asset_id: id(5),
+                rank: 0,
+            },
         ];
         let out = fuse(&vec_hits, &[], &Weights::default());
         assert_eq!(out.len(), 2);
@@ -127,9 +145,19 @@ mod tests {
 
     #[test]
     fn weights_shift_balance() {
-        let vec_hits = vec![Ranked { asset_id: id(1), rank: 0 }];
-        let lex_hits = vec![Ranked { asset_id: id(2), rank: 0 }];
-        let w = Weights { semantic: 3.0, lexical: 1.0, popularity: 0.0 };
+        let vec_hits = vec![Ranked {
+            asset_id: id(1),
+            rank: 0,
+        }];
+        let lex_hits = vec![Ranked {
+            asset_id: id(2),
+            rank: 0,
+        }];
+        let w = Weights {
+            semantic: 3.0,
+            lexical: 1.0,
+            popularity: 0.0,
+        };
         let out = fuse(&vec_hits, &lex_hits, &w);
         assert_eq!(out[0].asset_id, id(1)); // le poids sémantique fait gagner l'asset vectoriel
     }
@@ -138,8 +166,14 @@ mod tests {
     fn popularity_boost_promotes_clicked_item() {
         // Deux assets à scores proches ; le plus cliqué doit remonter avec un poids suffisant.
         let mut scored = vec![
-            Scored { asset_id: id(1), score: 0.50 },
-            Scored { asset_id: id(2), score: 0.45 },
+            Scored {
+                asset_id: id(1),
+                score: 0.50,
+            },
+            Scored {
+                asset_id: id(2),
+                score: 0.45,
+            },
         ];
         let pop = HashMap::from([(id(2), 1.0)]);
         apply_popularity(&mut scored, &pop, 0.2);
@@ -149,8 +183,14 @@ mod tests {
     #[test]
     fn popularity_is_noop_when_weight_zero() {
         let mut scored = vec![
-            Scored { asset_id: id(1), score: 0.50 },
-            Scored { asset_id: id(2), score: 0.45 },
+            Scored {
+                asset_id: id(1),
+                score: 0.50,
+            },
+            Scored {
+                asset_id: id(2),
+                score: 0.45,
+            },
         ];
         let before = scored.clone();
         apply_popularity(&mut scored, &HashMap::from([(id(2), 1.0)]), 0.0);
@@ -159,7 +199,10 @@ mod tests {
 
     #[test]
     fn popularity_is_noop_when_map_empty() {
-        let mut scored = vec![Scored { asset_id: id(1), score: 0.5 }];
+        let mut scored = vec![Scored {
+            asset_id: id(1),
+            score: 0.5,
+        }];
         let before = scored.clone();
         apply_popularity(&mut scored, &HashMap::new(), 0.5);
         assert_eq!(scored, before);

@@ -39,10 +39,18 @@ async fn get_weights(
     State(st): State<WeightsState>,
     Identity(ctx): Identity,
 ) -> Result<Json<SearchWeights>, (StatusCode, Json<Value>)> {
-    let w = st.db.get_search_weights(ctx.tenant_id).await.map_err(internal)?;
+    let w = st
+        .db
+        .get_search_weights(ctx.tenant_id)
+        .await
+        .map_err(internal)?;
     // Non configuré → défauts neutres (cohérent avec le pipeline).
     let (semantic, lexical, popularity) = w.unwrap_or((1.0, 1.0, 0.0));
-    Ok(Json(SearchWeights { semantic, lexical, popularity }))
+    Ok(Json(SearchWeights {
+        semantic,
+        lexical,
+        popularity,
+    }))
 }
 
 async fn put_weights(

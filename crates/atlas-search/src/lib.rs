@@ -48,7 +48,9 @@ pub struct AuthCtx {
 /// Sera remplacée par la vérification OIDC/clé d'API en conservant cette signature.
 pub fn resolve_auth(tenant_hdr: Option<&str>, user_hdr: Option<&str>) -> AuthCtx {
     AuthCtx {
-        tenant_id: tenant_hdr.and_then(|s| Uuid::parse_str(s).ok()).unwrap_or_else(Uuid::nil),
+        tenant_id: tenant_hdr
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::nil),
         user_id: user_hdr.and_then(|s| Uuid::parse_str(s).ok()),
     }
 }
@@ -86,7 +88,8 @@ pub trait VectorIndex: Send + Sync {
 }
 #[async_trait]
 pub trait LexicalIndex: Send + Sync {
-    async fn search(&self, query: &str, k: usize, f: &StructuredFilter, ctx: &AuthCtx) -> Vec<Uuid>;
+    async fn search(&self, query: &str, k: usize, f: &StructuredFilter, ctx: &AuthCtx)
+        -> Vec<Uuid>;
 }
 
 /// Résumé d'asset pour l'affichage des résultats (doc 25 §5).
@@ -233,7 +236,11 @@ fn merge_filters(base: StructuredFilter, over: StructuredFilter) -> StructuredFi
         has_people: over.has_people.or(base.has_people),
         orientation: over.orientation.or(base.orientation),
         rights_status: over.rights_status.or(base.rights_status),
-        r#type: if over.r#type.is_empty() { base.r#type } else { over.r#type },
+        r#type: if over.r#type.is_empty() {
+            base.r#type
+        } else {
+            over.r#type
+        },
     }
 }
 
@@ -322,7 +329,11 @@ async fn run_search(st: SearchState, req: SearchRequest, ctx: AuthCtx) -> Search
     // En mode example (par l'image), la voie lexicale n'a pas de sens : vectoriel seul.
     let l = match req.mode {
         Mode::Example => Vec::new(),
-        _ => st.lexical.search(&iq.semantic_text, k, &iq.filters, &ctx).await,
+        _ => {
+            st.lexical
+                .search(&iq.semantic_text, k, &iq.filters, &ctx)
+                .await
+        }
     };
     // Facettes : comptages sur l'ensemble autorisé, même clause de permission (§4.5).
     let facets = st.facets.facets(&iq.filters, &ctx).await;
@@ -446,7 +457,12 @@ impl VectorIndex for InMemoryIndex {
         _c: &AuthCtx,
     ) -> Vec<Uuid> {
         // Stub : « voisins » = tous les ids sauf la source (l'ordre n'a pas de sens ici).
-        self.ids.iter().filter(|&&id| id != example_asset_id).take(k).copied().collect()
+        self.ids
+            .iter()
+            .filter(|&&id| id != example_asset_id)
+            .take(k)
+            .copied()
+            .collect()
     }
 }
 #[async_trait]
@@ -502,10 +518,13 @@ mod tests {
         async fn summaries(&self, ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, AssetSummary> {
             ids.iter()
                 .map(|&id| {
-                    (id, AssetSummary {
-                        title: Some(format!("asset-{}", id.as_u128())),
-                        rights_status: Some("valid".into()),
-                    })
+                    (
+                        id,
+                        AssetSummary {
+                            title: Some(format!("asset-{}", id.as_u128())),
+                            rights_status: Some("valid".into()),
+                        },
+                    )
                 })
                 .collect()
         }
@@ -520,8 +539,14 @@ mod tests {
             m.insert(
                 "orientation".into(),
                 vec![
-                    FacetCount { value: "landscape".into(), count: 3 },
-                    FacetCount { value: "portrait".into(), count: 1 },
+                    FacetCount {
+                        value: "landscape".into(),
+                        count: 3,
+                    },
+                    FacetCount {
+                        value: "portrait".into(),
+                        count: 1,
+                    },
                 ],
             );
             m
@@ -541,7 +566,12 @@ mod tests {
     }
 
     fn state_with(ids: Vec<Uuid>) -> SearchState {
-        state_full(ids, Arc::new(NoopCatalog), Arc::new(NoopFacets), Arc::new(NoopSearchLog))
+        state_full(
+            ids,
+            Arc::new(NoopCatalog),
+            Arc::new(NoopFacets),
+            Arc::new(NoopSearchLog),
+        )
     }
 
     fn state_with_catalog(ids: Vec<Uuid>, catalog: Arc<dyn AssetCatalog>) -> SearchState {
@@ -583,12 +613,18 @@ mod tests {
         let ids: Vec<Uuid> = (1..=5).map(Uuid::from_u128).collect();
         let resp = search_handler(
             State(state_with(ids)),
-            Json(SearchRequest { page_size: 3, ..req("plage paysage sans personne") }),
+            Json(SearchRequest {
+                page_size: 3,
+                ..req("plage paysage sans personne")
+            }),
         )
         .await;
         assert_eq!(resp.0.results.len(), 3);
         // L'understanding a bien extrait les filtres.
-        assert_eq!(resp.0.interpreted_query.filters.orientation.as_deref(), Some("landscape"));
+        assert_eq!(
+            resp.0.interpreted_query.filters.orientation.as_deref(),
+            Some("landscape")
+        );
         assert!(!resp.0.degraded);
     }
 
@@ -597,7 +633,10 @@ mod tests {
         let ids: Vec<Uuid> = (1..=4).map(Uuid::from_u128).collect();
         let resp = search_handler(
             State(state_with(ids)),
-            Json(SearchRequest { mode: Mode::Lexical, ..req("mer") }),
+            Json(SearchRequest {
+                mode: Mode::Lexical,
+                ..req("mer")
+            }),
         )
         .await;
         // Lexical seul → résultats présents, et PAS marqué dégradé (omission volontaire, §4.7).
@@ -608,13 +647,22 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn explicit_filters_override_deduced_ones() {
         // "mer" ne déduit aucune orientation ; le client en impose une → elle doit primer.
-        let over = StructuredFilter { orientation: Some("portrait".into()), ..Default::default() };
+        let over = StructuredFilter {
+            orientation: Some("portrait".into()),
+            ..Default::default()
+        };
         let resp = search_handler(
             State(state_with(vec![Uuid::from_u128(1)])),
-            Json(SearchRequest { filters: Some(over), ..req("mer") }),
+            Json(SearchRequest {
+                filters: Some(over),
+                ..req("mer")
+            }),
         )
         .await;
-        assert_eq!(resp.0.interpreted_query.filters.orientation.as_deref(), Some("portrait"));
+        assert_eq!(
+            resp.0.interpreted_query.filters.orientation.as_deref(),
+            Some("portrait")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -625,7 +673,11 @@ mod tests {
         loop {
             let resp = search_handler(
                 State(state_with(ids.clone())),
-                Json(SearchRequest { page_size: 2, cursor: cursor.clone(), ..req("mer") }),
+                Json(SearchRequest {
+                    page_size: 2,
+                    cursor: cursor.clone(),
+                    ..req("mer")
+                }),
             )
             .await;
             seen.extend(resp.0.results.iter().map(|r| r.asset_id));
@@ -638,7 +690,11 @@ mod tests {
         let mut uniq = seen.clone();
         uniq.sort();
         uniq.dedup();
-        assert_eq!(uniq.len(), ids.len(), "aucun doublon ni saut sur la pagination");
+        assert_eq!(
+            uniq.len(),
+            ids.len(),
+            "aucun doublon ni saut sur la pagination"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -649,7 +705,12 @@ mod tests {
             Json(req("mer")),
         )
         .await;
-        let item = resp.0.results.iter().find(|r| r.asset_id == id).expect("résultat présent");
+        let item = resp
+            .0
+            .results
+            .iter()
+            .find(|r| r.asset_id == id)
+            .expect("résultat présent");
         assert_eq!(item.title.as_deref(), Some("asset-7"));
         assert_eq!(item.rights_status.as_deref(), Some("valid"));
     }
@@ -677,8 +738,18 @@ mod tests {
             Json(req("mer")),
         )
         .await;
-        let orient = resp.0.facets.get("orientation").expect("facette orientation présente");
-        assert_eq!(orient[0], FacetCount { value: "landscape".into(), count: 3 });
+        let orient = resp
+            .0
+            .facets
+            .get("orientation")
+            .expect("facette orientation présente");
+        assert_eq!(
+            orient[0],
+            FacetCount {
+                value: "landscape".into(),
+                count: 3
+            }
+        );
         assert_eq!(orient.len(), 2);
     }
 
@@ -717,7 +788,9 @@ mod tests {
     #[async_trait]
     impl PopularityProvider for FakePopularity {
         async fn popularity(&self, ids: &[Uuid], _ctx: &AuthCtx) -> HashMap<Uuid, u64> {
-            ids.iter().filter_map(|id| self.0.get(id).map(|&c| (*id, c))).collect()
+            ids.iter()
+                .filter_map(|id| self.0.get(id).map(|&c| (*id, c)))
+                .collect()
         }
     }
 
@@ -742,7 +815,10 @@ mod tests {
             cache: Arc::new(cache::NoopCache),
         };
         let resp = search_handler(State(st), Json(req("mer"))).await;
-        assert_eq!(resp.0.results[0].asset_id, last, "le plus cliqué remonte en tête");
+        assert_eq!(
+            resp.0.results[0].asset_id, last,
+            "le plus cliqué remonte en tête"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -755,7 +831,9 @@ mod tests {
                 panic!("ne doit pas être interrogé quand le poids est nul");
             }
         }
-        let idx = Arc::new(InMemoryIndex { ids: (1..=3).map(Uuid::from_u128).collect() });
+        let idx = Arc::new(InMemoryIndex {
+            ids: (1..=3).map(Uuid::from_u128).collect(),
+        });
         let st = SearchState {
             vector: idx.clone(),
             lexical: idx,
@@ -803,7 +881,10 @@ mod tests {
         // Page 1 de référence (sans curseur).
         let p1 = search_handler(
             State(state_with(ids.clone())),
-            Json(SearchRequest { page_size: 2, ..req("mer") }),
+            Json(SearchRequest {
+                page_size: 2,
+                ..req("mer")
+            }),
         )
         .await;
         let want: Vec<Uuid> = p1.0.results.iter().map(|r| r.asset_id).collect();
@@ -841,7 +922,10 @@ mod tests {
         .await;
         // Par l'exemple : des voisins reviennent, et la source est exclue des résultats.
         assert!(!resp.0.results.is_empty());
-        assert!(resp.0.results.iter().all(|r| r.asset_id != src), "la source ne doit pas figurer");
+        assert!(
+            resp.0.results.iter().all(|r| r.asset_id != src),
+            "la source ne doit pas figurer"
+        );
         assert!(!resp.0.degraded);
     }
 
@@ -849,7 +933,11 @@ mod tests {
     async fn example_mode_without_source_is_degraded_and_empty() {
         let resp = search_handler(
             State(state_with((1..=3).map(Uuid::from_u128).collect())),
-            Json(SearchRequest { mode: Mode::Example, example_asset_id: None, ..req("") }),
+            Json(SearchRequest {
+                mode: Mode::Example,
+                example_asset_id: None,
+                ..req("")
+            }),
         )
         .await;
         assert!(resp.0.results.is_empty());
@@ -879,37 +967,69 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn cache_hit_skips_recomputation() {
         let logger = FakeLogger::default();
-        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
-        let st = state_with_cache((1..=3).map(Uuid::from_u128).collect(), logger.clone(), cache);
+        let cache = Arc::new(cache::InMemoryTtlCache::new(
+            std::time::Duration::from_secs(60),
+        ));
+        let st = state_with_cache(
+            (1..=3).map(Uuid::from_u128).collect(),
+            logger.clone(),
+            cache,
+        );
         // 1er appel : miss → calcul + journalisation.
         let _ = run_search(st.clone(), req("mer"), AuthCtx::default()).await;
         // 2e appel identique : hit → retour anticipé, aucune nouvelle journalisation.
         let _ = run_search(st, req("mer"), AuthCtx::default()).await;
-        assert_eq!(logger.entries.lock().unwrap().len(), 1, "le 2e appel est servi par le cache");
+        assert_eq!(
+            logger.entries.lock().unwrap().len(),
+            1,
+            "le 2e appel est servi par le cache"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn cache_isolates_by_permission_fingerprint() {
         let logger = FakeLogger::default();
-        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
-        let st = state_with_cache((1..=3).map(Uuid::from_u128).collect(), logger.clone(), cache);
-        let a = AuthCtx { tenant_id: Uuid::nil(), user_id: Some(Uuid::from_u128(10)) };
-        let b = AuthCtx { tenant_id: Uuid::nil(), user_id: Some(Uuid::from_u128(20)) };
+        let cache = Arc::new(cache::InMemoryTtlCache::new(
+            std::time::Duration::from_secs(60),
+        ));
+        let st = state_with_cache(
+            (1..=3).map(Uuid::from_u128).collect(),
+            logger.clone(),
+            cache,
+        );
+        let a = AuthCtx {
+            tenant_id: Uuid::nil(),
+            user_id: Some(Uuid::from_u128(10)),
+        };
+        let b = AuthCtx {
+            tenant_id: Uuid::nil(),
+            user_id: Some(Uuid::from_u128(20)),
+        };
         let _ = run_search(st.clone(), req("mer"), a.clone()).await; // miss (A)
         let _ = run_search(st.clone(), req("mer"), b).await; // périmètre B distinct → miss
         let _ = run_search(st, req("mer"), a).await; // même périmètre que A → hit
-        assert_eq!(logger.entries.lock().unwrap().len(), 2, "deux périmètres ⇒ deux calculs (pas de fuite)");
+        assert_eq!(
+            logger.entries.lock().unwrap().len(),
+            2,
+            "deux périmètres ⇒ deux calculs (pas de fuite)"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn degraded_response_is_not_cached() {
         let logger = FakeLogger::default();
-        let cache = Arc::new(cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
+        let cache = Arc::new(cache::InMemoryTtlCache::new(
+            std::time::Duration::from_secs(60),
+        ));
         // Index vide → mode natural dégradé (vectoriel attendu mais vide).
         let st = state_with_cache(vec![], logger.clone(), cache);
         let r1 = run_search(st.clone(), req("mer"), AuthCtx::default()).await;
         assert!(r1.degraded);
         let _ = run_search(st, req("mer"), AuthCtx::default()).await;
-        assert_eq!(logger.entries.lock().unwrap().len(), 2, "réponse dégradée non mémorisée → recalcul");
+        assert_eq!(
+            logger.entries.lock().unwrap().len(),
+            2,
+            "réponse dégradée non mémorisée → recalcul"
+        );
     }
 }

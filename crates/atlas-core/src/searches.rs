@@ -57,7 +57,13 @@ async fn create(
     let query_json = req.query.to_string();
     let id = st
         .db
-        .create_saved_search(ctx.tenant_id, owner_of(&ctx), &req.name, &query_json, req.notify)
+        .create_saved_search(
+            ctx.tenant_id,
+            owner_of(&ctx),
+            &req.name,
+            &query_json,
+            req.notify,
+        )
         .await
         .map_err(internal)?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))

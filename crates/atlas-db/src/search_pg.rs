@@ -29,7 +29,13 @@ pub struct PgLexicalIndex {
 
 #[async_trait]
 impl LexicalIndex for PgLexicalIndex {
-    async fn search(&self, query: &str, k: usize, _f: &StructuredFilter, ctx: &AuthCtx) -> Vec<Uuid> {
+    async fn search(
+        &self,
+        query: &str,
+        k: usize,
+        _f: &StructuredFilter,
+        ctx: &AuthCtx,
+    ) -> Vec<Uuid> {
         match self
             .db
             .lexical_search(ctx.tenant_id, query, DEFAULT_LANG, k as i64)
@@ -57,7 +63,11 @@ impl VectorIndex for PgVectorIndex {
         // 1) embedding de la requête (texte → espace multimodal), in-process.
         let qvec = self.embedder.encode(query);
         // 2) kNN HNSW + filtres + RLS.
-        match self.db.vector_search(ctx.tenant_id, &qvec, f, k as i64).await {
+        match self
+            .db
+            .vector_search(ctx.tenant_id, &qvec, f, k as i64)
+            .await
+        {
             Ok(ids) => ids,
             Err(e) => {
                 // Dégradation gracieuse : on retombe sur le lexical (doc 04 §3.3).
@@ -101,7 +111,13 @@ impl AssetCatalog for PgAssetCatalog {
             Ok(rows) => rows
                 .into_iter()
                 .map(|(id, title, rights_status)| {
-                    (id, AssetSummary { title, rights_status: Some(rights_status) })
+                    (
+                        id,
+                        AssetSummary {
+                            title,
+                            rights_status: Some(rights_status),
+                        },
+                    )
                 })
                 .collect(),
             Err(e) => {
@@ -132,7 +148,10 @@ impl FacetProvider for PgFacets {
 
         let to_counts = |vals: Vec<(String, i64)>| -> Vec<FacetCount> {
             vals.into_iter()
-                .map(|(value, count)| FacetCount { value, count: count.max(0) as u64 })
+                .map(|(value, count)| FacetCount {
+                    value,
+                    count: count.max(0) as u64,
+                })
                 .collect()
         };
 
@@ -169,7 +188,10 @@ pub struct PgPopularity {
 impl PopularityProvider for PgPopularity {
     async fn popularity(&self, ids: &[Uuid], ctx: &AuthCtx) -> HashMap<Uuid, u64> {
         match self.db.asset_popularity(ctx.tenant_id, ids).await {
-            Ok(rows) => rows.into_iter().map(|(id, c)| (id, c.max(0) as u64)).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(id, c)| (id, c.max(0) as u64))
+                .collect(),
             Err(e) => {
                 // Dégradation gracieuse : pas de boost plutôt qu'échec de la recherche.
                 tracing::warn!(error = %e, "asset_popularity a échoué");
@@ -189,7 +211,11 @@ pub struct PgWeights {
 impl WeightsProvider for PgWeights {
     async fn weights(&self, ctx: &AuthCtx) -> Weights {
         match self.db.get_search_weights(ctx.tenant_id).await {
-            Ok(Some((semantic, lexical, popularity))) => Weights { semantic, lexical, popularity },
+            Ok(Some((semantic, lexical, popularity))) => Weights {
+                semantic,
+                lexical,
+                popularity,
+            },
             Ok(None) => Weights::default(),
             Err(e) => {
                 tracing::warn!(error = %e, "get_search_weights a échoué — défauts appliqués");

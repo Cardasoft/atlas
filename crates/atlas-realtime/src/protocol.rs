@@ -62,7 +62,10 @@ mod tests {
 
     #[test]
     fn parse_ping_unit_variant() {
-        assert_eq!(ClientMsg::parse(r#"{"op":"ping"}"#).unwrap(), ClientMsg::Ping);
+        assert_eq!(
+            ClientMsg::parse(r#"{"op":"ping"}"#).unwrap(),
+            ClientMsg::Ping
+        );
     }
 
     #[test]
@@ -87,7 +90,8 @@ mod tests {
 
     #[test]
     fn serialize_pong() {
-        let v: Value = serde_json::from_str(&serde_json::to_string(&ServerMsg::Pong).unwrap()).unwrap();
+        let v: Value =
+            serde_json::from_str(&serde_json::to_string(&ServerMsg::Pong).unwrap()).unwrap();
         assert_eq!(v["op"], "pong");
     }
 }

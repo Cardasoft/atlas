@@ -91,6 +91,7 @@ dependencies = [
  "async-trait",
  "atlas-embed",
  "atlas-search",
+ "atlas-types",
  "sqlx",
  "thiserror",
  "tokio",
@@ -107,6 +108,7 @@ name = "atlas-ingest"
 version = "0.1.0"
 dependencies = [
  "atlas-embed",
+ "atlas-types",
  "sha2",
 ]
 

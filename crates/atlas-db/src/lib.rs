@@ -97,12 +97,10 @@ impl Db {
             .bind(tenant.to_string())
             .execute(&mut *tx)
             .await?;
-        let rows = sqlx::query(
-            "SELECT id, title, rights_status FROM asset WHERE id = ANY($1)",
-        )
-        .bind(ids)
-        .fetch_all(&mut *tx)
-        .await?;
+        let rows = sqlx::query("SELECT id, title, rights_status FROM asset WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&mut *tx)
+            .await?;
         let out = rows
             .iter()
             .map(|r| {
@@ -132,11 +130,13 @@ impl Db {
             .await?;
 
         let mut out = Vec::new();
-        // Facettes textuelles : orientation, rights_status, mime. Colonnes figées.
+        // Facettes textuelles : orientation, rights_status, mime, ai_provenance. Colonnes figées.
+        // `ai_provenance` permet de filtrer les contenus IA à étiqueter (AI Act art. 50).
         for (facet, col) in [
             ("orientation", "orientation"),
             ("rights_status", "rights_status"),
             ("mime", "mime"),
+            ("ai_provenance", "ai_provenance"),
         ] {
             let sql = format!(
                 "SELECT {col}::text AS v, count(*) AS c FROM asset \

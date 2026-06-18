@@ -67,7 +67,8 @@ mod tests {
 
     #[test]
     fn extracts_landscape_no_people_rights() {
-        let i = interpret("plage au coucher de soleil sans personne, format paysage, libre de droit");
+        let i =
+            interpret("plage au coucher de soleil sans personne, format paysage, libre de droit");
         assert_eq!(i.filters.has_people, Some(false));
         assert_eq!(i.filters.orientation.as_deref(), Some("landscape"));
         assert_eq!(i.filters.rights_status.as_deref(), Some("valid"));

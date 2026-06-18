@@ -69,8 +69,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
         Some(db) => {
             // Cache de résultats cohérent avec les droits (doc 25 §6), TTL court en mémoire.
             // Partagé entre recherche (lecture) et ingestion (purge du tenant) → même instance.
-            let cache: Arc<dyn atlas_search::cache::SearchCache> =
-                Arc::new(atlas_search::cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)));
+            let cache: Arc<dyn atlas_search::cache::SearchCache> = Arc::new(
+                atlas_search::cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)),
+            );
             let search_state = atlas_search::SearchState {
                 vector: Arc::new(atlas_db::search_pg::PgVectorIndex {
                     db: db.clone(),
@@ -93,7 +94,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
             // Recherches enregistrées : disponibles avec la DB (doc 25 §3.2).
             .merge(searches::routes(searches::SearchesState { db: db.clone() }))
             // Configuration des facettes : pilote les facettes calculées (doc 25 §4.5).
-            .merge(facet_config::routes(facet_config::FacetConfigState { db: db.clone() }))
+            .merge(facet_config::routes(facet_config::FacetConfigState {
+                db: db.clone(),
+            }))
             // Autocomplétion : suggestions de titres par préfixe (doc 25 §5).
             .merge(suggest::routes(suggest::SuggestState { db: db.clone() }))
             // Capture de clic : alimente le signal de popularité (doc 25 §4.4/§6).
@@ -111,7 +114,9 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
                 facets: Arc::new(atlas_search::NoopFacets),
                 logger: Arc::new(atlas_search::NoopSearchLog),
                 popularity: Arc::new(atlas_search::NoopPopularity),
-                weights: Arc::new(atlas_search::StaticWeights(atlas_search::rrf::Weights::default())),
+                weights: Arc::new(atlas_search::StaticWeights(
+                    atlas_search::rrf::Weights::default(),
+                )),
                 cache: Arc::new(atlas_search::cache::NoopCache), // dev/air-gap : pas de cache
             };
             (search_state, None) // ingestion indisponible sans DB
@@ -156,7 +161,10 @@ async fn version() -> Json<Value> {
 
 async fn openapi() -> ([(axum::http::HeaderName, &'static str); 1], &'static str) {
     const SPEC: &str = include_str!("../../../openapi/atlas.v1.yaml");
-    ([(axum::http::header::CONTENT_TYPE, "application/yaml")], SPEC)
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/yaml")],
+        SPEC,
+    )
 }
 
 #[cfg(test)]
@@ -170,7 +178,12 @@ mod tests {
     async fn healthz_ok_without_db() {
         let app = build_router(None);
         let res = app
-            .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);

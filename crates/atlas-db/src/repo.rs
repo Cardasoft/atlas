@@ -30,6 +30,8 @@ impl Db {
     }
 
     /// Insère un asset minimal et renvoie son id (contexte tenant positionné pour la RLS).
+    /// `provenance` porte la transparence IA (AI Act art. 50) : origine, C2PA, générateur.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_asset(
         &self,
         tenant: Uuid,
@@ -39,6 +41,7 @@ impl Db {
         rights_status: &str,
         orientation: Option<&str>,
         has_people: Option<bool>,
+        provenance: &atlas_types::Provenance,
     ) -> Result<Uuid, DbError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
@@ -46,8 +49,10 @@ impl Db {
             .execute(&mut *tx)
             .await?;
         let row = sqlx::query(
-            r#"INSERT INTO asset (tenant_id, title, mime, status, rights_status, orientation, has_people)
-               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id"#,
+            r#"INSERT INTO asset
+                 (tenant_id, title, mime, status, rights_status, orientation, has_people,
+                  ai_provenance, c2pa_present, generator)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id"#,
         )
         .bind(tenant)
         .bind(title)
@@ -56,11 +61,38 @@ impl Db {
         .bind(rights_status)
         .bind(orientation)
         .bind(has_people)
+        .bind(provenance.ai.as_str())
+        .bind(provenance.c2pa_present)
+        .bind(provenance.generator.as_deref())
         .fetch_one(&mut *tx)
         .await?;
         let id = row.get::<Uuid, _>("id");
         tx.commit().await?;
         Ok(id)
+    }
+
+    /// Lit la provenance d'un asset (transparence IA, AI Act art. 50). `None` si absent.
+    pub async fn asset_provenance(
+        &self,
+        tenant: Uuid,
+        asset_id: Uuid,
+    ) -> Result<Option<atlas_types::Provenance>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let row =
+            sqlx::query("SELECT ai_provenance, c2pa_present, generator FROM asset WHERE id = $1")
+                .bind(asset_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        Ok(row.map(|r| atlas_types::Provenance {
+            ai: atlas_types::AiProvenance::from_token(&r.get::<String, _>("ai_provenance")),
+            c2pa_present: r.get::<bool, _>("c2pa_present"),
+            generator: r.get::<Option<String>, _>("generator"),
+        }))
     }
 
     /// Indexe le texte d'un asset (FTS). `tsv` calculé par PostgreSQL.
@@ -152,48 +184,89 @@ mod tests {
         let tenant = db.create_tenant("test").await.unwrap();
 
         let a = db
-            .insert_asset(tenant, "Plage au coucher de soleil", "image/jpeg", "READY", "valid", Some("landscape"), Some(false))
+            .insert_asset(
+                tenant,
+                "Plage au coucher de soleil",
+                "image/jpeg",
+                "READY",
+                "valid",
+                Some("landscape"),
+                Some(false),
+                &atlas_types::Provenance::default(),
+            )
             .await
             .unwrap();
-        db.upsert_search_text(tenant, a, "french", "plage coucher de soleil mer").await.unwrap();
+        db.upsert_search_text(tenant, a, "french", "plage coucher de soleil mer")
+            .await
+            .unwrap();
 
         let emb = FakeEmbedder;
-        db.upsert_embedding(tenant, a, "fake", &emb.encode("plage")).await.unwrap();
+        db.upsert_embedding(tenant, a, "fake", &emb.encode("plage"))
+            .await
+            .unwrap();
 
         // Lexical : la requête « plage » doit retrouver l'asset.
-        let lex = db.lexical_search(tenant, "plage", "french", 10).await.unwrap();
+        let lex = db
+            .lexical_search(tenant, "plage", "french", 10)
+            .await
+            .unwrap();
         assert!(lex.contains(&a), "FTS doit retrouver l'asset par 'plage'");
 
         // Vectoriel : kNN retourne l'asset (un seul embedding en base).
         let filter = atlas_search::understanding::StructuredFilter::default();
-        let vec = db.vector_search(tenant, &emb.encode("plage"), &filter, 10).await.unwrap();
+        let vec = db
+            .vector_search(tenant, &emb.encode("plage"), &filter, 10)
+            .await
+            .unwrap();
         assert!(vec.contains(&a), "kNN doit retrouver l'asset");
 
         // Hydratation : asset_summaries renvoie titre + droits pour l'asset visible (doc 25 §5).
         let sums = db.asset_summaries(tenant, &[a]).await.unwrap();
-        let (id, title, rights) = sums.iter().find(|(id, _, _)| *id == a).expect("résumé présent");
+        let (id, title, rights) = sums
+            .iter()
+            .find(|(id, _, _)| *id == a)
+            .expect("résumé présent");
         assert_eq!(*id, a);
         assert_eq!(title.as_deref(), Some("Plage au coucher de soleil"));
         assert_eq!(rights, "valid");
 
         // Facettes : l'asset « landscape » doit apparaître dans la facette orientation (doc 25 §4.5).
         let facets = db.facet_counts(tenant, 20).await.unwrap();
-        let (_, orient) = facets.iter().find(|(name, _)| name == "orientation").expect("facette orientation");
+        let (_, orient) = facets
+            .iter()
+            .find(|(name, _)| name == "orientation")
+            .expect("facette orientation");
         assert!(orient.iter().any(|(v, c)| v == "landscape" && *c >= 1));
 
         // facet_config : restreindre aux seules facettes configurées (doc 25 §4.5).
-        db.put_facet_config(tenant, "tenant", r#"["mime"]"#).await.unwrap();
+        db.put_facet_config(tenant, "tenant", r#"["mime"]"#)
+            .await
+            .unwrap();
         let fields = db.facet_config_fields(tenant, "tenant").await.unwrap();
         assert_eq!(fields, vec!["mime".to_string()]);
 
         // Recherche par l'exemple (doc 25 §4.2) : un 2e asset embarqué doit être retrouvé
         // depuis l'embedding de `a`, et `a` lui-même exclu des résultats.
         let b = db
-            .insert_asset(tenant, "Autre plage", "image/jpeg", "READY", "valid", Some("landscape"), Some(false))
+            .insert_asset(
+                tenant,
+                "Autre plage",
+                "image/jpeg",
+                "READY",
+                "valid",
+                Some("landscape"),
+                Some(false),
+                &atlas_types::Provenance::default(),
+            )
             .await
             .unwrap();
-        db.upsert_embedding(tenant, b, "fake", &emb.encode("plage")).await.unwrap();
-        let by_ex = db.vector_search_by_example(tenant, a, &filter, 10).await.unwrap();
+        db.upsert_embedding(tenant, b, "fake", &emb.encode("plage"))
+            .await
+            .unwrap();
+        let by_ex = db
+            .vector_search_by_example(tenant, a, &filter, 10)
+            .await
+            .unwrap();
         assert!(by_ex.contains(&b), "par l'exemple doit retrouver le voisin");
         assert!(!by_ex.contains(&a), "la source doit être exclue");
     }
@@ -207,13 +280,70 @@ mod tests {
         let t2 = db.create_tenant("t2").await.unwrap();
 
         let a1 = db
-            .insert_asset(t1, "secret t1", "image/jpeg", "READY", "valid", None, None)
+            .insert_asset(
+                t1,
+                "secret t1",
+                "image/jpeg",
+                "READY",
+                "valid",
+                None,
+                None,
+                &atlas_types::Provenance::default(),
+            )
             .await
             .unwrap();
-        db.upsert_search_text(t1, a1, "simple", "secret").await.unwrap();
+        db.upsert_search_text(t1, a1, "simple", "secret")
+            .await
+            .unwrap();
 
         // Recherche dans le contexte de t2 : ne doit JAMAIS voir l'asset de t1 (RLS).
         let res = db.lexical_search(t2, "secret", "simple", 10).await.unwrap();
         assert!(!res.contains(&a1), "fuite inter-tenant : RLS défaillante");
+    }
+
+    // Provenance / transparence IA (AI Act art. 50) : persistance, relecture et facette.
+    #[tokio::test]
+    #[ignore = "nécessite une base de test (ATLAS_TEST_DATABASE_URL)"]
+    async fn provenance_persisted_read_back_and_faceted() {
+        use atlas_types::{AiProvenance, Provenance};
+
+        let url = std::env::var("ATLAS_TEST_DATABASE_URL").expect("ATLAS_TEST_DATABASE_URL");
+        let db = Db::connect(&url).await.unwrap();
+        let tenant = db.create_tenant("prov").await.unwrap();
+
+        let prov = Provenance {
+            ai: AiProvenance::AiGenerated,
+            c2pa_present: true,
+            generator: Some("Firefly".into()),
+        };
+        let a = db
+            .insert_asset(
+                tenant,
+                "Affiche IA",
+                "image/png",
+                "READY",
+                "valid",
+                None,
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+
+        // Relecture fidèle de la provenance.
+        let back = db
+            .asset_provenance(tenant, a)
+            .await
+            .unwrap()
+            .expect("présent");
+        assert_eq!(back, prov);
+
+        // Facette : la valeur « ai_generated » doit apparaître au moins une fois.
+        let facets = db.facet_counts(tenant, 20).await.unwrap();
+        let (_, vals) = facets
+            .iter()
+            .find(|(name, _)| name == "ai_provenance")
+            .expect("facette ai_provenance");
+        assert!(vals.iter().any(|(v, c)| v == "ai_generated" && *c >= 1));
     }
 }

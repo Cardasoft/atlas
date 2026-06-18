@@ -46,12 +46,19 @@ async fn get_config(
     Identity(ctx): Identity,
     Query(q): Query<ScopeQuery>,
 ) -> Result<Json<FacetConfig>, (StatusCode, Json<Value>)> {
-    let raw = st.db.get_facet_config(ctx.tenant_id, &q.scope).await.map_err(internal)?;
+    let raw = st
+        .db
+        .get_facet_config(ctx.tenant_id, &q.scope)
+        .await
+        .map_err(internal)?;
     // Texte JSON issu de jsonb → tableau valide ; défaut [] si non configuré.
     let facets = raw
         .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
         .unwrap_or_default();
-    Ok(Json(FacetConfig { scope: q.scope, facets }))
+    Ok(Json(FacetConfig {
+        scope: q.scope,
+        facets,
+    }))
 }
 
 async fn put_config(

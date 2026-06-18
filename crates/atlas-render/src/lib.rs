@@ -39,7 +39,12 @@ pub fn fit_within(src: Size, max: u32) -> Size {
 /// clampé aux bornes de l'image source (doc 34 §4.2).
 pub fn crop_box_for_ratio(src: Size, focal: (u32, u32), ratio_w: u32, ratio_h: u32) -> Rect {
     if src.w == 0 || src.h == 0 || ratio_w == 0 || ratio_h == 0 {
-        return Rect { x: 0, y: 0, w: src.w, h: src.h };
+        return Rect {
+            x: 0,
+            y: 0,
+            w: src.w,
+            h: src.h,
+        };
     }
     // Plus grande fenêtre du ratio tenant dans la source.
     let target = ratio_w as f64 / ratio_h as f64;
@@ -109,7 +114,15 @@ mod tests {
     fn square_crop_from_landscape_is_centered() {
         // 1000x500, focal au centre, ratio 1:1 → carré 500x500 centré (x=250).
         let r = crop_box_for_ratio(Size { w: 1000, h: 500 }, (500, 250), 1, 1);
-        assert_eq!(r, Rect { x: 250, y: 0, w: 500, h: 500 });
+        assert_eq!(
+            r,
+            Rect {
+                x: 250,
+                y: 0,
+                w: 500,
+                h: 500
+            }
+        );
     }
 
     #[test]

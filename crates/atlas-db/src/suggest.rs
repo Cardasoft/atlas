@@ -104,22 +104,61 @@ mod tests {
         let t1 = db.create_tenant("sg1").await.unwrap();
         let t2 = db.create_tenant("sg2").await.unwrap();
 
-        db.insert_asset(t1, "Plage au coucher de soleil", "image/jpeg", "READY", "valid", None, None)
-            .await
-            .unwrap();
-        db.insert_asset(t1, "Plage de galets", "image/jpeg", "READY", "valid", None, None)
-            .await
-            .unwrap();
-        db.insert_asset(t1, "Montagne enneigée", "image/jpeg", "READY", "valid", None, None)
-            .await
-            .unwrap();
+        db.insert_asset(
+            t1,
+            "Plage au coucher de soleil",
+            "image/jpeg",
+            "READY",
+            "valid",
+            None,
+            None,
+            &atlas_types::Provenance::default(),
+        )
+        .await
+        .unwrap();
+        db.insert_asset(
+            t1,
+            "Plage de galets",
+            "image/jpeg",
+            "READY",
+            "valid",
+            None,
+            None,
+            &atlas_types::Provenance::default(),
+        )
+        .await
+        .unwrap();
+        db.insert_asset(
+            t1,
+            "Montagne enneigée",
+            "image/jpeg",
+            "READY",
+            "valid",
+            None,
+            None,
+            &atlas_types::Provenance::default(),
+        )
+        .await
+        .unwrap();
         // Asset d'un autre tenant : ne doit JAMAIS remonter (RLS).
-        db.insert_asset(t2, "Plage secrète t2", "image/jpeg", "READY", "valid", None, None)
-            .await
-            .unwrap();
+        db.insert_asset(
+            t2,
+            "Plage secrète t2",
+            "image/jpeg",
+            "READY",
+            "valid",
+            None,
+            None,
+            &atlas_types::Provenance::default(),
+        )
+        .await
+        .unwrap();
 
         let sug = db.suggest_titles(t1, "plage", 8).await.unwrap();
         assert_eq!(sug, vec!["Plage au coucher de soleil", "Plage de galets"]);
-        assert!(!sug.iter().any(|s| s.contains("t2")), "fuite inter-tenant (RLS)");
+        assert!(
+            !sug.iter().any(|s| s.contains("t2")),
+            "fuite inter-tenant (RLS)"
+        );
     }
 }

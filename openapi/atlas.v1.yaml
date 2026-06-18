@@ -243,6 +243,26 @@ components:
     RightsStatus:
       type: string
       enum: [valid, expiring, expired, none]
+    AiProvenance:
+      type: string
+      description: >-
+        Origine d'un contenu au regard de l'IA générative (transparence, AI Act art. 50).
+        Aligné sur le vocabulaire IPTC digitalSourceType repris par C2PA :
+        trainedAlgorithmicMedia → ai_generated ; composite → ai_edited.
+      enum: [human, ai_generated, ai_edited, unknown]
+      default: unknown
+    Provenance:
+      type: object
+      description: "Provenance / transparence IA d'un asset (AI Act art. 50, Content Credentials C2PA)"
+      properties:
+        ai: { $ref: "#/components/schemas/AiProvenance" }
+        c2pa_present:
+          type: boolean
+          description: "Un manifeste C2PA (Content Credentials) signé est présent dans le binaire"
+        generator:
+          type: string
+          nullable: true
+          description: "Outil/modèle générateur déclaré (ex. Firefly, Midjourney)"
     Asset:
       type: object
       required: [id, tenant_id, status, rights_status]
@@ -253,6 +273,7 @@ components:
         mime: { type: string, nullable: true }
         status: { $ref: "#/components/schemas/AssetStatus" }
         rights_status: { $ref: "#/components/schemas/RightsStatus" }
+        provenance: { $ref: "#/components/schemas/Provenance" }
     CreateAssetRequest:
       type: object
       required: [title]
@@ -260,12 +281,27 @@ components:
         title: { type: string }
         mime: { type: string, default: application/octet-stream }
         text: { type: string, description: "Texte à indexer (description/OCR/transcription)" }
+        provenance:
+          type: string
+          nullable: true
+          description: >-
+            Origine IA déclarée par l'éditeur (human | ai_generated | ai_edited).
+            Prime sur la détection par marqueurs C2PA/IPTC (AI Act art. 50).
+        generator:
+          type: string
+          nullable: true
+          description: "Outil/modèle générateur déclaré, si connu"
     CreateAssetResponse:
       type: object
       properties:
         id: { type: string, format: uuid }
         status: { $ref: "#/components/schemas/AssetStatus" }
         content_sha256: { type: string }
+        provenance: { $ref: "#/components/schemas/Provenance" }
+        transparency_label:
+          type: string
+          nullable: true
+          description: "Libellé de transparence à afficher si le contenu relève de l'IA (sinon absent)"
     StructuredFilter:
       type: object
       description: "Filtres structurés (déduits ou explicites, doc 25 §4.1)"
@@ -315,7 +351,10 @@ components:
         interpreted_query: { $ref: "#/components/schemas/InterpretedQuery" }
         facets:
           type: object
-          description: "Agrégations par facette sur l'ensemble autorisé (doc 25 §4.5) ; omis si vide"
+          description: >-
+            Agrégations par facette sur l'ensemble autorisé (doc 25 §4.5) ; omis si vide.
+            Facettes calculées : orientation, rights_status, mime, has_people, ai_provenance
+            (cette dernière permet de filtrer les contenus IA à étiqueter — AI Act art. 50).
           additionalProperties:
             type: array
             items: { $ref: "#/components/schemas/FacetCount" }

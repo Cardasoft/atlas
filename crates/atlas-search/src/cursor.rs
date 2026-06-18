@@ -67,7 +67,10 @@ pub fn paginate(
     query_hash: u64,
 ) -> (Vec<Scored>, Option<Cursor>) {
     let start = match cursor {
-        Some(c) => sorted.iter().position(|it| is_after(it, &c)).unwrap_or(sorted.len()),
+        Some(c) => sorted
+            .iter()
+            .position(|it| is_after(it, &c))
+            .unwrap_or(sorted.len()),
         None => 0,
     };
     let page: Vec<Scored> = sorted[start..].iter().take(page_size).copied().collect();
@@ -116,7 +119,11 @@ mod tests {
 
     #[test]
     fn cursor_round_trip() {
-        let c = Cursor { score: 0.123_456_79, asset_id: id(42), query_hash: 0xdead_beef_cafe_0001 };
+        let c = Cursor {
+            score: 0.123_456_79,
+            asset_id: id(42),
+            query_hash: 0xdead_beef_cafe_0001,
+        };
         let back = Cursor::decode(&c.encode()).expect("decode");
         assert_eq!(c, back);
         // Bits exacts → pas de dérive de score.
@@ -137,7 +144,10 @@ mod tests {
     fn pagination_covers_all_without_overlap_or_gap() {
         // 7 résultats triés (scores distincts) ; pages de 3 → 3 + 3 + 1.
         let sorted: Vec<Scored> = (0..7)
-            .map(|i| Scored { asset_id: id(i as u128), score: 1.0 - i as f32 * 0.1 })
+            .map(|i| Scored {
+                asset_id: id(i as u128),
+                score: 1.0 - i as f32 * 0.1,
+            })
             .collect();
 
         let mut seen = Vec::new();
@@ -151,25 +161,40 @@ mod tests {
             }
         }
         let expected: Vec<Uuid> = sorted.iter().map(|s| s.asset_id).collect();
-        assert_eq!(seen, expected, "couverture complète, ordre conservé, aucun doublon/saut");
+        assert_eq!(
+            seen, expected,
+            "couverture complète, ordre conservé, aucun doublon/saut"
+        );
     }
 
     #[test]
     fn pagination_stable_across_tied_scores() {
         // Scores égaux → tie-break par id ; le curseur doit reprendre exactement après.
         let sorted: Vec<Scored> = (0..5)
-            .map(|i| Scored { asset_id: id(i as u128), score: 0.5 })
+            .map(|i| Scored {
+                asset_id: id(i as u128),
+                score: 0.5,
+            })
             .collect();
         let (p1, next) = paginate(&sorted, None, 2, 0);
-        assert_eq!(p1.iter().map(|s| s.asset_id).collect::<Vec<_>>(), vec![id(0), id(1)]);
+        assert_eq!(
+            p1.iter().map(|s| s.asset_id).collect::<Vec<_>>(),
+            vec![id(0), id(1)]
+        );
         let (p2, _) = paginate(&sorted, next, 2, 0);
-        assert_eq!(p2.iter().map(|s| s.asset_id).collect::<Vec<_>>(), vec![id(2), id(3)]);
+        assert_eq!(
+            p2.iter().map(|s| s.asset_id).collect::<Vec<_>>(),
+            vec![id(2), id(3)]
+        );
     }
 
     #[test]
     fn last_page_has_no_next_cursor() {
         let sorted: Vec<Scored> = (0..2)
-            .map(|i| Scored { asset_id: id(i as u128), score: 1.0 - i as f32 })
+            .map(|i| Scored {
+                asset_id: id(i as u128),
+                score: 1.0 - i as f32,
+            })
             .collect();
         let (_page, next) = paginate(&sorted, None, 10, 0);
         assert!(next.is_none());

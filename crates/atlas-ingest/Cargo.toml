@@ -7,4 +7,5 @@ description = "Pipeline d'ingestion (doc 26). M1 : fonctions pures (hash contenu
 
 [dependencies]
 atlas-embed = { path = "../atlas-embed" }
+atlas-types = { path = "../atlas-types" }
 sha2 = { workspace = true }
