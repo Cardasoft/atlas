@@ -5,6 +5,10 @@
 //! sans modèle ni dépendance externe ; il sera remplacé par SigLIP (ort/Candle) en
 //! conservant ce contrat et donc ces tests.
 
+/// Pré/post-traitement déterministe (sans modèle ni `ort`) partagé par le `FakeEmbedder`
+/// et le futur `SiglipEmbedder` : canonicalisation texte, normalisation L2, cosinus.
+pub mod preprocess;
+
 /// Dimension de l'espace multimodal partagé (SigLIP so400m). Doit coïncider avec
 /// la colonne `embedding.vec vector(1152)` de la migration 0001.
 pub const EMBED_DIM: usize = 1152;
@@ -40,6 +44,8 @@ impl Embedder for FakeEmbedder {
     }
 
     fn encode(&self, text: &str) -> Vec<f32> {
+        // Canonicalisation déterministe partagée avec le futur encodeur réel (SigLIP).
+        let text = preprocess::prepare_text(text);
         // Générateur congruentiel linéaire amorcé par le hash du texte → vecteur stable.
         let mut state = Self::fnv1a(text.as_bytes()).max(1);
         let mut v = Vec::with_capacity(EMBED_DIM);
@@ -51,13 +57,8 @@ impl Embedder for FakeEmbedder {
             let x = ((state >> 33) as f32 / (1u64 << 31) as f32) - 1.0;
             v.push(x);
         }
-        // Normalisation L2 (les requêtes et les assets vivent sur la sphère unité).
-        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for x in &mut v {
-                *x /= norm;
-            }
-        }
+        // Normalisation L2 (sphère unité) — fonction pure partagée (preprocess).
+        preprocess::normalize_l2(&mut v);
         v
     }
 }
@@ -84,7 +85,9 @@ impl Embedder for SiglipEmbedder {
         EMBED_DIM
     }
     fn encode(&self, _text: &str) -> Vec<f32> {
-        unimplemented!("inférence SigLIP via ort — à brancher (M1+)")
+        // Pipeline cible : preprocess::prepare_text → tokenisation → inférence ort →
+        // preprocess::normalize_l2. À brancher avec le modèle local + ONNX Runtime.
+        unimplemented!("inférence SigLIP via ort — à brancher (M1+, env outillé)")
     }
 }
 
