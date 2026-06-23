@@ -15,6 +15,10 @@ members = [
     "crates/atlas-db",
     "crates/atlas-core",
 ]
+# Front WASM (Leptos CSR) : EXCLU du workspace back. Cible wasm32, bâti par `trunk`
+# (pas par `cargo test --all`), avec son propre Cargo.lock → la CI back (test/clippy/
+# cargo-deny) reste verte et hermétique. cf. crates/atlas-web/README.md.
+exclude = ["crates/atlas-web"]
 
 [workspace.package]
 version = "0.1.0"
