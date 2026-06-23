@@ -46,3 +46,18 @@ jobs:
         run: cargo build --release --locked --offline
       - name: Test de démarrage air-gap
         run: ./scripts/airgap-test.sh
+
+  frontend:
+    # Front WASM (crates/atlas-web) — EXCLU du workspace back, donc bâti à part ici.
+    # Le runner a le réseau → résout l'arbre Leptos et compile en wasm32 (build-vérif du front).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cible wasm32
+        run: rustup target add wasm32-unknown-unknown
+      - name: Format (front)
+        run: cargo fmt --manifest-path crates/atlas-web/Cargo.toml --check
+      - name: Lint (front)
+        run: cargo clippy --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+      - name: Build wasm (front)
+        run: cargo build --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown
