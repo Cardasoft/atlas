@@ -117,7 +117,7 @@ mod tests {
     fn authenticator_rejects_empty_token() {
         let a = DevAuthenticator;
         assert!(a.authenticate("").is_none());
-        assert_eq!(a.authenticate("admin").unwrap().is_admin, true);
-        assert_eq!(a.authenticate("u123").unwrap().is_admin, false);
+        assert!(a.authenticate("admin").unwrap().is_admin);
+        assert!(!a.authenticate("u123").unwrap().is_admin);
     }
 }
