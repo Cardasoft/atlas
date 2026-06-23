@@ -3,6 +3,7 @@ name = "atlas-types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "DTO partagés back (Rust) ↔ front (WASM). Source unique de modèles."
 
 [dependencies]

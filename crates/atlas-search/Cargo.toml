@@ -3,6 +3,7 @@ name = "atlas-search"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "Moteur de recherche hybride (vectoriel + lexical + filtres) et fusion RRF (doc 25)."
 
 [dependencies]

@@ -3,6 +3,7 @@ name = "atlas-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "Service Core API d'Atlas (M0) : gateway minimal, health, OpenAPI servi localement."
 
 [[bin]]
