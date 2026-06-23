@@ -1,12 +1,14 @@
 name: ci
 # CI hermétique (doc 02 §12 / doc 24 DoD) : format, lint, tests, licences, build offline, air-gap.
+# Principe : on récupère les dépendances UNE fois en ligne (`cargo fetch --locked`), puis on
+# build/teste en `--offline` → cela PROUVE qu'aucun réseau n'est requis au-delà du cache crates.io
+# (les deps sont 100 % pur-Rust : sqlx sans TLS ni macros, pas de réseau au build).
 on:
   push: { branches: [main] }
   pull_request: {}
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_NET_OFFLINE: "true"   # build hermétique : pas de pull réseau (deps vendorées)
 
 jobs:
   quality:
@@ -15,26 +17,32 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup show
+      - name: Fetch deps (en ligne, une fois)
+        run: cargo fetch --locked
       - name: Format
         run: cargo fmt --all --check
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --offline -- -D warnings
       - name: Tests
-        run: cargo test --all --locked
+        run: cargo test --all --locked --offline
 
   licenses:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: cargo-deny (liste blanche de licences)
-        run: cargo deny check licenses bans sources advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources advisories
 
   airgap:
     # Vérifie que le produit construit et démarre SANS réseau (hors API LLM optionnelle).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build offline
+      - name: Fetch deps (en ligne, une fois)
+        run: cargo fetch --locked
+      - name: Build offline (hermétique)
         run: cargo build --release --locked --offline
       - name: Test de démarrage air-gap
         run: ./scripts/airgap-test.sh

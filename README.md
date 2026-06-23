@@ -61,6 +61,11 @@ curl -s localhost:8080/openapi.json | head
 curl -s -X POST localhost:8080/v1/assets \
   -H 'content-type: application/json' \
   -d '{"title":"Plage au coucher de soleil","text":"mer sable paysage"}'
+# ingestion d'un contenu généré par IA → étiquetage de transparence (AI Act art. 50)
+curl -s -X POST localhost:8080/v1/assets \
+  -H 'content-type: application/json' \
+  -d '{"title":"Affiche","text":"montagne","provenance":"ai_generated","generator":"Firefly"}'
+# → la réponse porte "transparency_label":"Contenu généré par IA" et la facette ai_provenance
 # recherche (in-memory si pas de DB ; FTS+kNN réels si DB)
 curl -s -X POST localhost:8080/v1/search \
   -H 'content-type: application/json' \
@@ -91,6 +96,25 @@ cargo clippy --all-targets -- -D warnings
 cargo deny check          # licences/bans/sources
 ./scripts/airgap-test.sh  # après cargo build --release
 ```
+
+## Transparence IA & provenance (AI Act art. 50 / C2PA)
+À l'ingestion, Atlas enregistre la **provenance** de chaque asset pour répondre au règlement
+européen **AI Act, article 50** (marquage/étiquetage des contenus générés ou manipulés par IA,
+applicable au **2 août 2026** ; *Code de bonnes pratiques* finalisé le 10 juin 2026 citant les
+**Content Credentials C2PA** comme mécanisme de référence) :
+- `ai_provenance` : `human` · `ai_generated` · `ai_edited` · `unknown`.
+- `c2pa_present` : un manifeste C2PA signé est présent dans le binaire.
+- `generator` : outil/modèle générateur déclaré (ex. « Firefly »).
+
+La détection est **pure et hermétique** (`atlas-ingest::provenance`, testée sans I/O) : elle
+inspecte les octets pour repérer la boîte **JUMBF/C2PA** et les marqueurs **IPTC
+`digitalSourceType`** (`trainedAlgorithmicMedia` → généré ; `compositeWith…` → modifié). Une
+**déclaration** explicite de l'éditeur (champ `provenance` de l'upload) **prime** sur la
+détection. La provenance est exposée dans la réponse d'ingestion (avec un
+`transparency_label` prêt à afficher), poussée en temps réel (événement `asset.ingested`),
+persistée (migration `0006`) et offerte en **facette de recherche** `ai_provenance` (pour
+filtrer/auditer les contenus IA). Le parsing cryptographique complet d'un manifeste C2PA signé
+(crate `c2pa`, dépendances natives) viendra à un jalon ultérieur, sans changer ce contrat.
 
 ## Prochaines étapes (doc 24, M1 — MVP Solo)
 1. ✅ Recherche hybride — squelette (`atlas-search`, doc 25) : `/v1/search`, fusion RRF, query understanding.

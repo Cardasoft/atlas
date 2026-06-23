@@ -3,6 +3,7 @@ name = "atlas-bus"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "Bus de messages (doc 02/26). M1 : InMemoryBus testable ; NATS JetStream derrière le même trait."
 
 [dependencies]

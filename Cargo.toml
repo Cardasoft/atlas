@@ -36,7 +36,8 @@ thiserror = "1"
 async-trait = "0.1"
 sha2 = "0.10"
 # sqlx sans TLS (Postgres local/interne) ni macros (pas de DB au build) → build hermétique.
-sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
+# 0.8 : corrige l'avis RUSTSEC sur 0.7.4 (mauvaise interprétation du protocole binaire Postgres). MSRV 1.78 OK.
+sqlx = { version = "0.8.1", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 
 [profile.release]
 lto = "thin"

@@ -3,6 +3,7 @@ name = "atlas-render"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "Renditions & crop (doc 06/34). Géométrie pure testée ; libvips/FFmpeg derrière un trait."
 
 [dependencies]

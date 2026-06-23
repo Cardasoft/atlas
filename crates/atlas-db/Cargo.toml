@@ -3,11 +3,13 @@ name = "atlas-db"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false  # crate interne du workspace, jamais publiée sur crates.io (cf. deny.toml allow-wildcard-paths)
 description = "Accès PostgreSQL (pool sqlx), RLS multi-tenant, implémentations d'index (FTS)."
 
 [dependencies]
 atlas-search = { path = "../atlas-search" }
 atlas-embed = { path = "../atlas-embed" }
+atlas-types = { path = "../atlas-types" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }

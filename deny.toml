@@ -22,6 +22,10 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Les crates internes du workspace se référencent par `path` sans version (= « wildcard »
+# au sens cargo-deny) : c'est légitime et non publié sur crates.io → on les autorise
+# explicitement, tout en gardant `wildcards = "deny"` pour les dépendances externes.
+allow-wildcard-paths = true
 
 [advisories]
 yanked = "deny"

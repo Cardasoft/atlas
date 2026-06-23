@@ -8,7 +8,7 @@ pub mod auth;
 pub mod protocol;
 pub mod registry;
 
-use auth::{Authenticator, AuthCtx, DefaultPdp, DevAuthenticator, Pdp};
+use auth::{AuthCtx, Authenticator, DefaultPdp, DevAuthenticator, Pdp};
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Query, State},
@@ -156,7 +156,10 @@ async fn handle_client(
             for ch in channels {
                 // Abonnement scopé par permissions (doc 40 §5) : refus → Denied, pas d'abonnement.
                 if !hub.pdp.can_subscribe(ctx, &ch) {
-                    let denied = ServerMsg::Denied { channel: ch, reason: "forbidden".into() };
+                    let denied = ServerMsg::Denied {
+                        channel: ch,
+                        reason: "forbidden".into(),
+                    };
                     if send(socket, &denied).await.is_err() {
                         return false;
                     }

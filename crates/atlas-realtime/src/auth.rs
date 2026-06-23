@@ -79,15 +79,24 @@ mod tests {
     fn parse_channels() {
         assert_eq!(Channel::parse("ingest"), Channel::Ingest);
         assert_eq!(Channel::parse("asset:abc"), Channel::Asset("abc".into()));
-        assert_eq!(Channel::parse("admin:queues"), Channel::Admin("queues".into()));
+        assert_eq!(
+            Channel::parse("admin:queues"),
+            Channel::Admin("queues".into())
+        );
         assert_eq!(Channel::parse("weird"), Channel::Unknown("weird".into()));
     }
 
     #[test]
     fn pdp_blocks_admin_for_non_admin() {
         let pdp = DefaultPdp;
-        let user = AuthCtx { tenant: "t".into(), is_admin: false };
-        let admin = AuthCtx { tenant: "t".into(), is_admin: true };
+        let user = AuthCtx {
+            tenant: "t".into(),
+            is_admin: false,
+        };
+        let admin = AuthCtx {
+            tenant: "t".into(),
+            is_admin: true,
+        };
         assert!(!pdp.can_subscribe(&user, "admin:queues"));
         assert!(pdp.can_subscribe(&admin, "admin:queues"));
     }
@@ -95,7 +104,10 @@ mod tests {
     #[test]
     fn pdp_blocks_unknown_channels() {
         let pdp = DefaultPdp;
-        let user = AuthCtx { tenant: "t".into(), is_admin: false };
+        let user = AuthCtx {
+            tenant: "t".into(),
+            is_admin: false,
+        };
         assert!(!pdp.can_subscribe(&user, "weird"));
         assert!(pdp.can_subscribe(&user, "asset:1"));
         assert!(pdp.can_subscribe(&user, "ingest"));
@@ -105,7 +117,7 @@ mod tests {
     fn authenticator_rejects_empty_token() {
         let a = DevAuthenticator;
         assert!(a.authenticate("").is_none());
-        assert_eq!(a.authenticate("admin").unwrap().is_admin, true);
-        assert_eq!(a.authenticate("u123").unwrap().is_admin, false);
+        assert!(a.authenticate("admin").unwrap().is_admin);
+        assert!(!a.authenticate("u123").unwrap().is_admin);
     }
 }

@@ -14,6 +14,7 @@ tags:
   - name: system
   - name: assets
   - name: search
+  - name: saved-search
 paths:
   /healthz:
     get:
@@ -56,6 +57,144 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SearchResponse" }
         "422": { $ref: "#/components/responses/Problem" }
+  /search/facet-config:
+    get:
+      tags: [search]
+      operationId: getFacetConfig
+      summary: Configuration des facettes d'un périmètre (doc 25 §4.5)
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, default: tenant }
+      responses:
+        "200":
+          description: Configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacetConfig" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [search]
+      operationId: putFacetConfig
+      summary: Définir la liste de facettes calculées pour un périmètre
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacetConfig" }
+      responses:
+        "204": { description: Enregistrée }
+        "400": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+  /search/suggest:
+    get:
+      tags: [search]
+      operationId: suggest
+      summary: Autocomplétion par préfixe sur les titres d'assets (doc 25 §5)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: "Préfixe à compléter (vide → aucune suggestion)"
+        - name: limit
+          in: query
+          schema: { type: integer, default: 8, maximum: 20 }
+      responses:
+        "200":
+          description: Suggestions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Suggestions" }
+        "500": { $ref: "#/components/responses/Problem" }
+  /search/click:
+    post:
+      tags: [search]
+      operationId: recordSearchClick
+      summary: Enregistrer un clic résultat → signal de popularité (doc 25 §4.4/§6)
+      description: >-
+        Le client renvoie le `query_hash` reçu dans la réponse de recherche et l'asset ouvert.
+        Le clic est rattaché à la dernière recherche correspondante (RLS). Un `query_hash`
+        inconnu est ignoré sans erreur (204).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClickRequest" }
+      responses:
+        "204": { description: Clic pris en compte (ou ignoré si orphelin) }
+        "500": { $ref: "#/components/responses/Problem" }
+  /search/weights:
+    get:
+      tags: [search]
+      operationId: getSearchWeights
+      summary: Pondérations RRF du tenant (doc 25 §4.4/§9)
+      description: "Défauts neutres (semantic=1, lexical=1, popularity=0) si non configuré."
+      responses:
+        "200":
+          description: Pondérations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchWeights" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [search]
+      operationId: putSearchWeights
+      summary: Configurer les pondérations RRF du tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchWeights" }
+      responses:
+        "204": { description: Pondérations enregistrées }
+        "500": { $ref: "#/components/responses/Problem" }
+  /searches:
+    get:
+      tags: [saved-search]
+      operationId: listSavedSearches
+      summary: Lister les recherches enregistrées du propriétaire (doc 25 §3.2)
+      responses:
+        "200":
+          description: Recherches enregistrées
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SavedSearch" }
+        "500": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [saved-search]
+      operationId: createSavedSearch
+      summary: Enregistrer une recherche (corps `/v1/search` rejouable)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSavedSearchRequest" }
+      responses:
+        "201":
+          description: Recherche enregistrée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                required: [id]
+        "500": { $ref: "#/components/responses/Problem" }
+  /searches/{id}:
+    delete:
+      tags: [saved-search]
+      operationId: deleteSavedSearch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Supprimée }
+        "404": { $ref: "#/components/responses/Problem" }
   /assets:
     post:
       tags: [assets]
@@ -104,6 +243,26 @@ components:
     RightsStatus:
       type: string
       enum: [valid, expiring, expired, none]
+    AiProvenance:
+      type: string
+      description: >-
+        Origine d'un contenu au regard de l'IA générative (transparence, AI Act art. 50).
+        Aligné sur le vocabulaire IPTC digitalSourceType repris par C2PA :
+        trainedAlgorithmicMedia → ai_generated ; composite → ai_edited.
+      enum: [human, ai_generated, ai_edited, unknown]
+      default: unknown
+    Provenance:
+      type: object
+      description: "Provenance / transparence IA d'un asset (AI Act art. 50, Content Credentials C2PA)"
+      properties:
+        ai: { $ref: "#/components/schemas/AiProvenance" }
+        c2pa_present:
+          type: boolean
+          description: "Un manifeste C2PA (Content Credentials) signé est présent dans le binaire"
+        generator:
+          type: string
+          nullable: true
+          description: "Outil/modèle générateur déclaré (ex. Firefly, Midjourney)"
     Asset:
       type: object
       required: [id, tenant_id, status, rights_status]
@@ -114,6 +273,7 @@ components:
         mime: { type: string, nullable: true }
         status: { $ref: "#/components/schemas/AssetStatus" }
         rights_status: { $ref: "#/components/schemas/RightsStatus" }
+        provenance: { $ref: "#/components/schemas/Provenance" }
     CreateAssetRequest:
       type: object
       required: [title]
@@ -121,18 +281,50 @@ components:
         title: { type: string }
         mime: { type: string, default: application/octet-stream }
         text: { type: string, description: "Texte à indexer (description/OCR/transcription)" }
+        provenance:
+          type: string
+          nullable: true
+          description: >-
+            Origine IA déclarée par l'éditeur (human | ai_generated | ai_edited).
+            Prime sur la détection par marqueurs C2PA/IPTC (AI Act art. 50).
+        generator:
+          type: string
+          nullable: true
+          description: "Outil/modèle générateur déclaré, si connu"
     CreateAssetResponse:
       type: object
       properties:
         id: { type: string, format: uuid }
         status: { $ref: "#/components/schemas/AssetStatus" }
         content_sha256: { type: string }
+        provenance: { $ref: "#/components/schemas/Provenance" }
+        transparency_label:
+          type: string
+          nullable: true
+          description: "Libellé de transparence à afficher si le contenu relève de l'IA (sinon absent)"
+    StructuredFilter:
+      type: object
+      description: "Filtres structurés (déduits ou explicites, doc 25 §4.1)"
+      properties:
+        has_people: { type: boolean, nullable: true }
+        orientation: { type: string, nullable: true }
+        rights_status: { $ref: "#/components/schemas/RightsStatus" }
+        type: { type: array, items: { type: string } }
     SearchRequest:
       type: object
       required: [query]
       properties:
         query: { type: string }
         mode: { type: string, enum: [natural, lexical, example], default: natural }
+        example_asset_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Asset source pour mode:example (doc 25 §4.2)"
+        filters:
+          allOf: [ { $ref: "#/components/schemas/StructuredFilter" } ]
+          nullable: true
+          description: "Filtres explicites ; priment sur les filtres déduits (interpreted_query éditable)"
         page_size: { type: integer, default: 50, maximum: 200 }
         cursor: { type: string, nullable: true }
     SearchResultItem:
@@ -142,14 +334,86 @@ components:
         score: { type: number }
         title: { type: string }
         rights_status: { $ref: "#/components/schemas/RightsStatus" }
+    InterpretedQuery:
+      type: object
+      description: "Requête interprétée, renvoyée au client et éditable (doc 25 §4.1)"
+      properties:
+        semantic_text: { type: string }
+        filters: { $ref: "#/components/schemas/StructuredFilter" }
+        confidence: { type: number }
+        editable: { type: boolean }
     SearchResponse:
       type: object
       properties:
         results:
           type: array
           items: { $ref: "#/components/schemas/SearchResultItem" }
+        interpreted_query: { $ref: "#/components/schemas/InterpretedQuery" }
+        facets:
+          type: object
+          description: >-
+            Agrégations par facette sur l'ensemble autorisé (doc 25 §4.5) ; omis si vide.
+            Facettes calculées : orientation, rights_status, mime, has_people, ai_provenance
+            (cette dernière permet de filtrer les contenus IA à étiqueter — AI Act art. 50).
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/FacetCount" }
         next_cursor: { type: string, nullable: true }
+        query_hash:
+          type: string
+          description: "Hash de la requête (doc 25 §4.4/§6) ; à renvoyer sur POST /v1/search/click"
         degraded: { type: boolean }
+    ClickRequest:
+      type: object
+      properties:
+        query_hash: { type: string, description: "`query_hash` reçu de POST /v1/search" }
+        asset_id: { type: string, format: uuid }
+      required: [query_hash, asset_id]
+    SearchWeights:
+      type: object
+      description: "Pondérations RRF par tenant (doc 25 §4.4/§9)"
+      properties:
+        semantic: { type: number, format: float, default: 1.0 }
+        lexical: { type: number, format: float, default: 1.0 }
+        popularity: { type: number, format: float, default: 0.0 }
+    FacetCount:
+      type: object
+      properties:
+        value: { type: string }
+        count: { type: integer, format: int64, minimum: 0 }
+      required: [value, count]
+    Suggestions:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items: { type: string }
+      required: [suggestions]
+    FacetConfig:
+      type: object
+      properties:
+        scope: { type: string, default: tenant }
+        facets:
+          type: array
+          items: { type: string }
+          description: "Liste ordonnée de champs de facette (restreint les facettes calculées)"
+      required: [facets]
+    CreateSavedSearchRequest:
+      type: object
+      properties:
+        name: { type: string }
+        query: { type: object, additionalProperties: true, description: "Corps /v1/search à rejouer" }
+        notify: { type: boolean, default: false }
+      required: [name, query]
+    SavedSearch:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        query: { type: object, additionalProperties: true }
+        notify: { type: boolean }
+        created_at: { type: string }
+      required: [id, name, query, notify, created_at]
     Problem:
       type: object
       properties:

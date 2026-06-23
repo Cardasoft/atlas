@@ -7,4 +7,5 @@
 
 pub mod hash;
 pub mod prepare;
+pub mod provenance;
 pub mod state;

@@ -44,7 +44,9 @@ impl Embedder for FakeEmbedder {
         let mut state = Self::fnv1a(text.as_bytes()).max(1);
         let mut v = Vec::with_capacity(EMBED_DIM);
         for _ in 0..EMBED_DIM {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // map vers [-1, 1]
             let x = ((state >> 33) as f32 / (1u64 << 31) as f32) - 1.0;
             v.push(x);

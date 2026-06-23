@@ -10,6 +10,11 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 mod assets;
+mod click;
+mod facet_config;
+mod searches;
+mod suggest;
+mod weights;
 
 /// État des routes système (readiness dépend de la DB si présente).
 #[derive(Clone)]
@@ -62,19 +67,42 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
     // Sélection des index + routes d'ingestion selon la disponibilité de PostgreSQL.
     let (search_state, ingest_routes): (atlas_search::SearchState, Option<Router>) = match &db {
         Some(db) => {
+            // Cache de résultats cohérent avec les droits (doc 25 §6), TTL court en mémoire.
+            // Partagé entre recherche (lecture) et ingestion (purge du tenant) → même instance.
+            let cache: Arc<dyn atlas_search::cache::SearchCache> = Arc::new(
+                atlas_search::cache::InMemoryTtlCache::new(std::time::Duration::from_secs(60)),
+            );
             let search_state = atlas_search::SearchState {
                 vector: Arc::new(atlas_db::search_pg::PgVectorIndex {
                     db: db.clone(),
                     embedder: embedder.clone(),
                 }),
                 lexical: Arc::new(atlas_db::search_pg::PgLexicalIndex { db: db.clone() }),
-                weights: atlas_search::rrf::Weights::default(),
+                catalog: Arc::new(atlas_db::search_pg::PgAssetCatalog { db: db.clone() }),
+                facets: Arc::new(atlas_db::search_pg::PgFacets { db: db.clone() }),
+                logger: Arc::new(atlas_db::search_pg::PgSearchLog { db: db.clone() }),
+                popularity: Arc::new(atlas_db::search_pg::PgPopularity { db: db.clone() }),
+                weights: Arc::new(atlas_db::search_pg::PgWeights { db: db.clone() }),
+                cache: cache.clone(),
             };
             let ingest = assets::routes(assets::AssetsState {
                 db: db.clone(),
                 embedder: embedder.clone(),
                 hub: hub.clone(),
-            });
+                cache,
+            })
+            // Recherches enregistrées : disponibles avec la DB (doc 25 §3.2).
+            .merge(searches::routes(searches::SearchesState { db: db.clone() }))
+            // Configuration des facettes : pilote les facettes calculées (doc 25 §4.5).
+            .merge(facet_config::routes(facet_config::FacetConfigState {
+                db: db.clone(),
+            }))
+            // Autocomplétion : suggestions de titres par préfixe (doc 25 §5).
+            .merge(suggest::routes(suggest::SuggestState { db: db.clone() }))
+            // Capture de clic : alimente le signal de popularité (doc 25 §4.4/§6).
+            .merge(click::routes(click::ClickState { db: db.clone() }))
+            // Pondérations RRF : équilibre sémantique/lexical/popularité par tenant (§4.4/§9).
+            .merge(weights::routes(weights::WeightsState { db: db.clone() }));
             (search_state, Some(ingest))
         }
         None => {
@@ -82,7 +110,14 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
             let search_state = atlas_search::SearchState {
                 vector: idx.clone(),
                 lexical: idx,
-                weights: atlas_search::rrf::Weights::default(),
+                catalog: Arc::new(atlas_search::NoopCatalog),
+                facets: Arc::new(atlas_search::NoopFacets),
+                logger: Arc::new(atlas_search::NoopSearchLog),
+                popularity: Arc::new(atlas_search::NoopPopularity),
+                weights: Arc::new(atlas_search::StaticWeights(
+                    atlas_search::rrf::Weights::default(),
+                )),
+                cache: Arc::new(atlas_search::cache::NoopCache), // dev/air-gap : pas de cache
             };
             (search_state, None) // ingestion indisponible sans DB
         }
@@ -126,7 +161,10 @@ async fn version() -> Json<Value> {
 
 async fn openapi() -> ([(axum::http::HeaderName, &'static str); 1], &'static str) {
     const SPEC: &str = include_str!("../../../openapi/atlas.v1.yaml");
-    ([(axum::http::header::CONTENT_TYPE, "application/yaml")], SPEC)
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/yaml")],
+        SPEC,
+    )
 }
 
 #[cfg(test)]
@@ -140,7 +178,12 @@ mod tests {
     async fn healthz_ok_without_db() {
         let app = build_router(None);
         let res = app
-            .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
