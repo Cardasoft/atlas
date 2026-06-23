@@ -50,14 +50,18 @@ jobs:
   frontend:
     # Front WASM (crates/atlas-web) — EXCLU du workspace back, donc bâti à part ici.
     # Le runner a le réseau → résout l'arbre Leptos et compile en wasm32 (build-vérif du front).
+    # Le front est de l'OUTILLAGE DEV : il bâtit en `stable` (récent), PAS sous le toolchain 1.78
+    # épinglé pour le back hermétique (l'arbre Leptos exige un cargo plus récent que 1.78).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cible wasm32
-        run: rustup target add wasm32-unknown-unknown
+      - name: Toolchain stable + cible wasm32
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy rustfmt
+          rustup target add --toolchain stable wasm32-unknown-unknown
       - name: Format (front)
-        run: cargo fmt --manifest-path crates/atlas-web/Cargo.toml --check
+        run: cargo +stable fmt --manifest-path crates/atlas-web/Cargo.toml --check
       - name: Lint (front)
-        run: cargo clippy --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+        run: cargo +stable clippy --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
       - name: Build wasm (front)
-        run: cargo build --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown
+        run: cargo +stable build --manifest-path crates/atlas-web/Cargo.toml --target wasm32-unknown-unknown
