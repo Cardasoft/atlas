@@ -39,12 +39,49 @@
       .status { color: var(--dim); margin: 14px 2px; }
       .results { list-style: none; padding: 0; margin: 0; }
       .results li {
-        display: flex; justify-content: space-between; gap: 12px;
+        display: flex; justify-content: space-between; align-items: center; gap: 12px;
         padding: 12px 14px; border: 1px solid var(--line);
         border-radius: 10px; background: var(--panel); margin-bottom: 8px;
       }
       .title { font-weight: 500; }
+      .meta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
       .score { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+      /* Bandeau « mode dégradé » */
+      .degraded {
+        margin: 0 0 14px; padding: 10px 14px; border-radius: 10px;
+        border: 1px solid #5a4a1e; background: #2a2310; color: #f0d894;
+      }
+
+      /* Compréhension de requête (query understanding) */
+      .understand {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+        margin: 0 2px 16px; padding: 10px 14px; border-radius: 10px;
+        border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+        font-size: 14px;
+      }
+      .u-label {
+        text-transform: uppercase; letter-spacing: .04em; font-size: 11px;
+        font-weight: 600; color: var(--accent);
+      }
+      .u-sem { color: var(--txt); }
+      .u-conf { font-variant-numeric: tabular-nums; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip {
+        padding: 2px 8px; border-radius: 999px; font-size: 12px;
+        border: 1px solid var(--line); background: #1f2530; color: var(--txt);
+      }
+
+      /* Badge de statut de droits (gestion des droits DAM) */
+      .badge {
+        padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+        border: 1px solid var(--line); background: #1f2530; color: var(--dim);
+      }
+      .badge.ok { border-color: #2e5a36; background: #14241a; color: #8fe0a3; }
+      .badge.warn { border-color: #5a3a2e; background: #241a14; color: #e8b08f; }
+
+      /* État vide */
+      .empty { color: var(--dim); margin: 14px 2px; }
     </style>
   </head>
   <body></body>
