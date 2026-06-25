@@ -26,6 +26,9 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+# Service de fichiers statiques pour servir le front WASM bâti (dist/) — beta web : un
+# binaire unique sert l'UI Leptos + l'API. `fs` only → pas de TLS/réseau (souverain).
+tower-http = { version = "0.6", default-features = false, features = ["fs"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -71,9 +71,18 @@ curl -s -X POST localhost:8080/v1/search \
   -H 'content-type: application/json' \
   -d '{"query":"plage paysage sans personne","page_size":10}'
 
-# 3) Édition Solo complète (infra incluse)
+# 3) Beta web — binaire unique servant l'UI (front WASM) + l'API
+cd crates/atlas-web && rustup run stable trunk build --release && cd ../..   # -> dist/
+ATLAS_WEB_DIR="$PWD/crates/atlas-web/dist" cargo run -p atlas-core --release
+# ouvrir http://localhost:8080  → l'UI Atlas est servie par atlas-core (repli SPA inclus)
+
+# 4) Édition Solo complète (infra incluse)
 docker compose up --build
 ```
+
+> **Déploiement / lancement de la beta web** (Docker, binaire, variables d'env, état
+> vérifié) : voir **[`DEPLOY.md`](DEPLOY.md)**. Le Core sert le front statique dès que
+> `ATLAS_WEB_DIR` pointe sur un `dist/` trunk (sinon API seule — comportement historique).
 
 ## Tests d'intégration (base réelle)
 Les tests touchant PostgreSQL sont `#[ignore]` et pilotés par une variable d'env.

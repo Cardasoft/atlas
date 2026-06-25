@@ -11,6 +11,10 @@ pub struct Config {
     /// false par défaut : aucune API LLM externe. Activable explicitement (doc 16 F54).
     pub allow_external_llm: bool,
     pub edition: Edition,
+    /// Répertoire du front WASM bâti (trunk `dist/`) servi en statique par le Core.
+    /// `None` → API seule (le front est servi par `trunk serve` en dev). Beta web :
+    /// pointer sur le `dist/` pour qu'un binaire unique serve l'UI **et** l'API.
+    pub web_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,8 @@ impl Config {
                 Ok("enterprise") => Edition::Enterprise,
                 _ => Edition::Solo,
             },
+            // Servir le front statique uniquement si la variable est définie (vide → ignorée).
+            web_dir: env::var("ATLAS_WEB_DIR").ok().filter(|s| !s.is_empty()),
         })
     }
 }

@@ -6,7 +6,9 @@
 use axum::{extract::State, routing::get, Json, Router};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 
 mod assets;
@@ -46,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let app = build_router(db);
+    let app = build_router(db, cfg.web_dir.as_deref());
 
     let addr: SocketAddr = cfg.bind_addr.parse()?;
     info!(%addr, "écoute");
@@ -56,7 +58,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Assemble le routeur. `db = None` → recherche in-memory (dev/tests).
-pub fn build_router(db: Option<atlas_db::Db>) -> Router {
+/// `web_dir = Some(dir)` → sert le front WASM bâti (trunk `dist/`) en statique, avec
+/// repli SPA sur `index.html` ; le binaire unique sert alors l'UI **et** l'API (beta web).
+pub fn build_router(db: Option<atlas_db::Db>, web_dir: Option<&str>) -> Router {
     // M1 : encodeur factice déterministe, partagé recherche + ingestion.
     // Remplacé par SigLIP (ort/Candle) en conservant le trait Embedder → aucun changement aval.
     let embedder: Arc<dyn atlas_embed::Embedder> = Arc::new(atlas_embed::FakeEmbedder);
@@ -136,7 +140,29 @@ pub fn build_router(db: Option<atlas_db::Db>) -> Router {
         v1 = v1.merge(ingest);
     }
 
-    Router::new().merge(system).nest("/v1", v1)
+    let mut app = Router::new().merge(system).nest("/v1", v1);
+
+    // Front WASM statique (beta web) : si `web_dir` pointe sur un `dist/` trunk existant,
+    // on le sert en repli (fallback) → l'UI Leptos est servie par le même binaire que l'API.
+    // Repli SPA : toute route inconnue (hors /v1, /healthz…) renvoie `index.html` (routage CSR).
+    if let Some(dir) = web_dir {
+        let index = Path::new(dir).join("index.html");
+        if index.is_file() {
+            // `.fallback` (et non `.not_found_service`) : on conserve le statut 200 du fichier
+            // servi → une route SPA inconnue renvoie `index.html` en 200 (routage CSR Leptos),
+            // pas un 404 (ce que ferait `not_found_service`, qui force le statut à 404).
+            let serve = ServeDir::new(dir).fallback(ServeFile::new(index));
+            app = app.fallback_service(serve);
+            info!(web_dir = dir, "front WASM servi en statique (beta web)");
+        } else {
+            warn!(
+                web_dir = dir,
+                "ATLAS_WEB_DIR défini mais index.html introuvable — front non servi (API seule)"
+            );
+        }
+    }
+
+    app
 }
 
 async fn healthz() -> Json<Value> {
@@ -176,7 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn healthz_ok_without_db() {
-        let app = build_router(None);
+        let app = build_router(None, None);
         let res = app
             .oneshot(
                 Request::builder()
@@ -191,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_route_mounted() {
-        let app = build_router(None);
+        let app = build_router(None, None);
         let res = app
             .oneshot(
                 Request::builder()
@@ -204,5 +230,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// Beta web : avec `web_dir`, le binaire sert le front statique. On crée un `dist/`
+    /// temporaire (index.html) et on vérifie qu'il est servi à la racine ET qu'une route
+    /// SPA inconnue retombe sur `index.html` (routage côté client), tout en laissant l'API
+    /// répondre sur ses propres routes.
+    #[tokio::test]
+    async fn serves_static_front_with_spa_fallback() {
+        let dir = std::env::temp_dir().join(format!("atlas-web-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = "<!doctype html><title>Atlas DAM test</title>";
+        std::fs::write(dir.join("index.html"), marker).unwrap();
+
+        let app = build_router(None, Some(dir.to_str().unwrap()));
+
+        // Racine → index.html.
+        let res = app
+            .clone()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Atlas DAM test"));
+
+        // Route SPA inconnue → repli sur index.html (200, pas 404).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/recherche/abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // L'API garde la priorité sur le fallback statique.
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
