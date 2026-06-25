@@ -38,6 +38,9 @@ services:
       ATLAS_DATABASE_URL: "postgres://atlas:atlas@postgres:5432/atlas"
       ATLAS_NATS_URL: "nats://nats:4222"
       ATLAS_EDITION: "solo"
+      # Front WASM bâti dans l'image (cf. Dockerfile) servi en statique par le Core →
+      # http://localhost:8080 affiche l'UI Atlas (UI + API depuis un seul binaire).
+      ATLAS_WEB_DIR: "/srv/atlas-web"
       # ATLAS_ALLOW_EXTERNAL_LLM non défini → IA locale uniquement (souverain).
     depends_on:
       postgres:
