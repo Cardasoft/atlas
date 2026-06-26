@@ -8,18 +8,31 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
-use crate::SearchResponse;
+use crate::{SearchResponse, StructuredFilter};
 
 #[derive(Serialize)]
 struct SearchRequest<'a> {
     query: &'a str,
     page_size: u32,
+    /// Filtres explicites (facettes cliquées) : priment sur les filtres déduits (contrat
+    /// `interpreted_query` éditable, doc 25 §4.1). Omis quand aucun filtre n'est actif.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a StructuredFilter>,
 }
 
 /// Appelle `POST /v1/search` et renvoie la réponse désérialisée (ou un message d'erreur).
-pub async fn search(query: &str, page_size: u32) -> Result<SearchResponse, String> {
-    let body =
-        serde_json::to_string(&SearchRequest { query, page_size }).map_err(|e| e.to_string())?;
+/// `filters` porte les filtres explicites issus des facettes cliquées (`None` si aucun).
+pub async fn search(
+    query: &str,
+    page_size: u32,
+    filters: Option<&StructuredFilter>,
+) -> Result<SearchResponse, String> {
+    let body = serde_json::to_string(&SearchRequest {
+        query,
+        page_size,
+        filters,
+    })
+    .map_err(|e| e.to_string())?;
 
     let opts = RequestInit::new();
     opts.set_method("POST");
