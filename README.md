@@ -66,6 +66,10 @@ curl -s -X POST localhost:8080/v1/assets \
   -H 'content-type: application/json' \
   -d '{"title":"Affiche","text":"montagne","provenance":"ai_generated","generator":"Firefly"}'
 # → la réponse porte "transparency_label":"Contenu généré par IA" et la facette ai_provenance
+# upload d'un FICHIER BINAIRE réel (AT-004, geste DAM n°1) → content_sha256 sur les octets réels
+curl -s -X POST localhost:8080/v1/assets \
+  -F 'file=@photo.jpg;type=image/jpeg' \
+  -F 'title=Plage' -F 'text=mer sable' -F 'provenance=human'
 # recherche (in-memory si pas de DB ; FTS+kNN réels si DB)
 curl -s -X POST localhost:8080/v1/search \
   -H 'content-type: application/json' \
@@ -129,7 +133,7 @@ filtrer/auditer les contenus IA). Le parsing cryptographique complet d'un manife
 1. ✅ Recherche hybride — squelette (`atlas-search`, doc 25) : `/v1/search`, fusion RRF, query understanding.
 2. ✅ PostgreSQL (`atlas-db`) : pool sqlx, RLS par tenant (transaction + `set_config('atlas.tenant')`), `PgLexicalIndex` (FTS), readiness DB. Le service bascule sur Pg si joignable, sinon in-memory.
 3. ✅ Embedding de requête (`atlas-embed`, trait `Embedder` + `FakeEmbedder` testé) + `PgVectorIndex` kNN pgvector (`vec <=> $qvec`, filtres + RLS, `pgvector_literal` testé). SigLIP réel = remplacement de `FakeEmbedder` sans toucher l'aval.
-4. ✅ Ingestion `POST /v1/assets` (`atlas-ingest::prepare` pur + persistance repo) : hash → `search_text` → `embedding`, asset immédiatement cherchable. Reste : réception binaire en flux, renditions, workers NATS.
+4. ✅ Ingestion `POST /v1/assets` (`atlas-ingest::prepare` pur + persistance repo) : hash → `search_text` → `embedding`, asset immédiatement cherchable. **Upload `multipart/form-data` de fichier binaire réel** (AT-004) : `content_sha256` + détection C2PA sur les **octets réels** ; JSON M1 conservé en compat. Reste : pHash perceptuel réel sur image décodée (AT-004b), stockage objet (AT-005), renditions, workers NATS.
 5. ✅ Realtime Gateway (`atlas-realtime`, doc 40) : WebSocket `/v1/ws` (protocole subscribe/event/ping, Hub broadcast, reprise par `seq`, heartbeat). `POST /v1/assets` publie `asset.ingested` → l'UI abonnée se met à jour **sans rafraîchissement**. Reste : auth à l'upgrade + pont NATS multi-nœuds.
 6. Seams posés (TDD, logique pure testée) : **stockage objet** (`atlas-store`, FS réel + SeaweedFS à brancher), **renditions/crop** (`atlas-render`, géométrie testée + libvips à brancher), **bus/workers** (`atlas-bus`, InMemoryBus + NATS à brancher), **auth/PDP WebSocket** (`atlas-realtime::auth`), **SigLIP** (`atlas-embed` feature `ml`). Reste à brancher les libs natives (libvips/FFmpeg, ort+modèle, client NATS) dans un environnement avec toolchain + miroirs.
 
