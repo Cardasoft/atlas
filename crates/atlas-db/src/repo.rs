@@ -8,6 +8,19 @@ use crate::{Db, DbError};
 use sqlx::Row;
 use uuid::Uuid;
 
+/// Vue complète d'un asset pour `GET /v1/assets/{id}` (AT-006). Mappe le schéma OpenAPI `Asset`
+/// (`id`, `tenant_id`, `title`, `mime`, `status`, `rights_status`, `provenance`).
+#[derive(Debug, Clone)]
+pub struct AssetRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub title: Option<String>,
+    pub mime: Option<String>,
+    pub status: String,
+    pub rights_status: String,
+    pub provenance: atlas_types::Provenance,
+}
+
 /// Concatène les sources textuelles (titre, caption, OCR, transcription) en un texte
 /// unique destiné au `tsvector` (doc 25). Ignore les parties vides, sépare par espace.
 pub fn compose_search_text(parts: &[&str]) -> String {
@@ -92,6 +105,42 @@ impl Db {
             ai: atlas_types::AiProvenance::from_token(&r.get::<String, _>("ai_provenance")),
             c2pa_present: r.get::<bool, _>("c2pa_present"),
             generator: r.get::<Option<String>, _>("generator"),
+        }))
+    }
+
+    /// Lit un asset complet par id, borné au tenant courant par la RLS `FORCE` (AT-006).
+    /// `None` si l'asset n'existe pas **ou** appartient à un autre tenant : la RLS le rend
+    /// invisible → l'API répond 404 sans fuiter l'existence d'un asset inter-tenant.
+    pub async fn get_asset(
+        &self,
+        tenant: Uuid,
+        asset_id: Uuid,
+    ) -> Result<Option<AssetRecord>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('atlas.tenant', $1, true)")
+            .bind(tenant.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let row = sqlx::query(
+            "SELECT id, tenant_id, title, mime, status, rights_status, \
+             ai_provenance, c2pa_present, generator FROM asset WHERE id = $1",
+        )
+        .bind(asset_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(row.map(|r| AssetRecord {
+            id: r.get::<Uuid, _>("id"),
+            tenant_id: r.get::<Uuid, _>("tenant_id"),
+            title: r.get::<Option<String>, _>("title"),
+            mime: r.get::<Option<String>, _>("mime"),
+            status: r.get::<String, _>("status"),
+            rights_status: r.get::<String, _>("rights_status"),
+            provenance: atlas_types::Provenance {
+                ai: atlas_types::AiProvenance::from_token(&r.get::<String, _>("ai_provenance")),
+                c2pa_present: r.get::<bool, _>("c2pa_present"),
+                generator: r.get::<Option<String>, _>("generator"),
+            },
         }))
     }
 
@@ -345,5 +394,56 @@ mod tests {
             .find(|(name, _)| name == "ai_provenance")
             .expect("facette ai_provenance");
         assert!(vals.iter().any(|(v, c)| v == "ai_generated" && *c >= 1));
+    }
+
+    // AT-006 : `get_asset` relit un asset complet pour son tenant, et la RLS le rend
+    // invisible (`None`) depuis un autre tenant → l'API renverra 404 sans fuite d'existence.
+    #[tokio::test]
+    #[ignore = "nécessite une base de test (ATLAS_TEST_DATABASE_URL)"]
+    async fn get_asset_reads_back_and_is_tenant_isolated() {
+        use atlas_types::{AiProvenance, Provenance};
+
+        let url = std::env::var("ATLAS_TEST_DATABASE_URL").expect("ATLAS_TEST_DATABASE_URL");
+        let db = Db::connect(&url).await.unwrap();
+        let t1 = db.create_tenant("get-t1").await.unwrap();
+        let t2 = db.create_tenant("get-t2").await.unwrap();
+
+        let prov = Provenance {
+            ai: AiProvenance::AiEdited,
+            c2pa_present: false,
+            generator: Some("Photoshop".into()),
+        };
+        let a = db
+            .insert_asset(
+                t1,
+                "Visuel campagne",
+                "image/png",
+                "READY",
+                "valid",
+                None,
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+
+        // Lecture par le tenant propriétaire : tous les champs du schéma `Asset`.
+        let got = db.get_asset(t1, a).await.unwrap().expect("présent pour t1");
+        assert_eq!(got.id, a);
+        assert_eq!(got.tenant_id, t1);
+        assert_eq!(got.title.as_deref(), Some("Visuel campagne"));
+        assert_eq!(got.mime.as_deref(), Some("image/png"));
+        assert_eq!(got.status, "READY");
+        assert_eq!(got.rights_status, "valid");
+        assert_eq!(got.provenance, prov);
+
+        // Lecture par un autre tenant : invisible (RLS) → `None` → 404 côté API.
+        assert!(
+            db.get_asset(t2, a).await.unwrap().is_none(),
+            "fuite inter-tenant : get_asset doit être borné par la RLS"
+        );
+
+        // Id inexistant : `None` également.
+        assert!(db.get_asset(t1, Uuid::new_v4()).await.unwrap().is_none());
     }
 }

@@ -5,7 +5,12 @@
 use atlas_embed::Embedder;
 use atlas_ingest::prepare::{prepare, IngestInput};
 use atlas_search::Identity;
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -52,10 +57,61 @@ pub struct CreateAssetResponse {
     pub transparency_label: Option<&'static str>,
 }
 
+/// Réponse de `GET /v1/assets/{id}` — mappe le schéma OpenAPI `Asset` (AT-006).
+#[derive(Debug, Serialize)]
+pub struct AssetView {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    pub status: String,
+    pub rights_status: String,
+    /// Provenance / transparence IA de l'asset (AI Act art. 50).
+    pub provenance: atlas_types::Provenance,
+}
+
 pub fn routes(state: AssetsState) -> Router {
     Router::new()
         .route("/assets", post(create_asset))
+        .route("/assets/:id", get(get_asset))
         .with_state(state)
+}
+
+/// `GET /v1/assets/{id}` (AT-006) — lit un asset du tenant authentifié (AT-001).
+/// La RLS borne la lecture au tenant : un id d'un autre tenant est invisible → **404**
+/// (pas de fuite d'existence inter-tenant). `Identity` impose déjà une auth valide (401 sinon).
+async fn get_asset(
+    State(st): State<AssetsState>,
+    Identity(ctx): Identity,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AssetView>, (StatusCode, Json<Value>)> {
+    let asset = st
+        .db
+        .get_asset(ctx.tenant_id, id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(not_found)?;
+    Ok(Json(AssetView {
+        id: asset.id,
+        tenant_id: asset.tenant_id,
+        title: asset.title,
+        mime: asset.mime,
+        status: asset.status,
+        rights_status: asset.rights_status,
+        provenance: asset.provenance,
+    }))
+}
+
+fn not_found() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "type": "https://atlas.local/errors/not-found",
+            "title": "Asset introuvable"
+        })),
+    )
 }
 
 async fn create_asset(
