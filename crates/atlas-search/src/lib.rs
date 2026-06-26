@@ -3,6 +3,7 @@
 //! query understanding par règles, handler `/v1/search`. Les implémentations réelles
 //! (SQL) arrivent quand PostgreSQL est branché ; ici un stub en mémoire valide le flux.
 
+pub mod apiauth;
 pub mod cache;
 pub mod cursor;
 pub mod eval;
@@ -12,7 +13,8 @@ pub mod understanding;
 use async_trait::async_trait;
 use axum::{
     extract::{FromRequestParts, State},
-    http::request::Parts,
+    http::{request::Parts, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
@@ -35,7 +37,7 @@ fn query_hash_u64(query: &str) -> u64 {
 
 /// Contexte d'autorisation (doc 38). M1 : tenant + utilisateur résolus depuis la requête
 /// (stand-in du jeton OIDC à venir). `Default` = tenant nil, aucun utilisateur.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthCtx {
     pub tenant_id: Uuid,
     /// Utilisateur résolu (propriétaire des recherches enregistrées, auteur du journal).
@@ -55,22 +57,78 @@ pub fn resolve_auth(tenant_hdr: Option<&str>, user_hdr: Option<&str>) -> AuthCtx
     }
 }
 
-/// Nom des en-têtes portant l'identité M1 (remplacés par le jeton à terme).
+/// En-têtes de **dev** portant l'identité (mode air-gap mono-tenant uniquement ; en production
+/// ils sont **ignorés** au profit de la clé d'API — voir `apiauth`).
 const HDR_TENANT: &str = "x-atlas-tenant";
 const HDR_USER: &str = "x-atlas-user";
+/// En-tête standard portant la clé d'API (`Authorization: Bearer <clé>`).
+const HDR_AUTHZ: &str = "authorization";
 
-/// Extracteur axum : résout `AuthCtx` depuis les en-têtes de la requête. Jamais en échec
-/// (défauts mono-tenant) ; l'autorisation fine reste portée par la RLS (défense en profondeur).
+/// Construit les [`apiauth::Credentials`] d'une requête depuis ses en-têtes (sans dépendre du
+/// reste d'axum → testable). Le porteur accepte `Bearer`/`bearer`.
+fn credentials_from_headers(headers: &HeaderMap) -> apiauth::Credentials {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let bearer = get(HDR_AUTHZ).and_then(|v| {
+        let v = v.trim();
+        v.strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+            .map(|s| s.trim().to_string())
+    });
+    apiauth::Credentials {
+        bearer,
+        dev_tenant: get(HDR_TENANT).map(str::to_string),
+        dev_user: get(HDR_USER).map(str::to_string),
+    }
+}
+
+/// Rejet d'authentification → **401 Unauthorized** (corps JSON minimal + `WWW-Authenticate`).
+pub struct Unauthorized;
+impl IntoResponse for Unauthorized {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::WWW_AUTHENTICATE,
+                "Bearer realm=\"atlas\"",
+            )],
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
+            .into_response()
+    }
+}
+
+/// Extracteur axum : résout l'identité **authentifiée** de la requête (AT-001).
+///
+/// L'[`apiauth::ApiAuthenticator`] est injecté par le routeur `/v1` via une couche `Extension`.
+/// En mode clé (production), seule une clé d'API valide donne une identité ; sinon → 401. En
+/// mode dev/air-gap, l'identité provient des en-têtes (mono-tenant). **Fail-closed** : si aucun
+/// authentificateur n'est monté (ne devrait pas arriver sous `/v1`), on refuse (401) plutôt que
+/// d'accorder une identité par défaut. L'autorisation fine reste portée par la RLS (défense en
+/// profondeur).
 #[derive(Debug, Clone)]
 pub struct Identity(pub AuthCtx);
 
 #[async_trait]
 impl<S: Send + Sync> FromRequestParts<S> for Identity {
-    type Rejection = std::convert::Infallible;
+    type Rejection = Unauthorized;
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let hdr = |name: &str| parts.headers.get(name).and_then(|v| v.to_str().ok());
-        Ok(Identity(resolve_auth(hdr(HDR_TENANT), hdr(HDR_USER))))
+        let creds = credentials_from_headers(&parts.headers);
+        match parts.extensions.get::<Arc<dyn apiauth::ApiAuthenticator>>() {
+            Some(auth) => auth
+                .authenticate(&creds)
+                .map(Identity)
+                .map_err(|_| Unauthorized),
+            None => Err(Unauthorized),
+        }
     }
+}
+
+/// Couche injectant l'authentificateur dans les requêtes du sous-routeur (à appliquer sur `/v1`).
+/// L'extracteur [`Identity`] le récupère depuis les extensions de requête.
+pub fn auth_layer(
+    auth: Arc<dyn apiauth::ApiAuthenticator>,
+) -> axum::Extension<Arc<dyn apiauth::ApiAuthenticator>> {
+    axum::Extension(auth)
 }
 
 /// Une voie de récupération renvoie des hits classés (doc 25 §4.3).

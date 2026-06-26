@@ -36,6 +36,21 @@ async fn main() -> anyhow::Result<()> {
     let cfg = atlas_config::Config::from_env()?;
     info!(edition = ?cfg.edition, external_llm = cfg.allow_external_llm, "démarrage atlas-core");
 
+    // Authentification de périmètre de l'API /v1 (AT-001) : clé d'API si `ATLAS_API_KEYS` est
+    // fourni (identité non falsifiable), sinon mode dev/air-gap par en-têtes (mono-tenant).
+    let (auth, n_keys) = atlas_search::apiauth::build_authenticator(cfg.api_keys.as_deref());
+    if auth.enforces() {
+        info!(
+            api_keys = n_keys,
+            "auth API : clés d'API requises (identité non falsifiable)"
+        );
+    } else {
+        warn!(
+            "auth API : mode DEV (en-têtes de confiance, identité FALSIFIABLE) — \
+             définir ATLAS_API_KEYS pour activer l'auth par clé en production"
+        );
+    }
+
     // Connexion DB optionnelle : le service démarre même sans PG (dev/air-gap test).
     let db = match atlas_db::Db::connect(&cfg.database_url).await {
         Ok(db) => {
@@ -48,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let app = build_router(db, cfg.web_dir.as_deref());
+    let app = build_router(db, cfg.web_dir.as_deref(), auth);
 
     let addr: SocketAddr = cfg.bind_addr.parse()?;
     info!(%addr, "écoute");
@@ -60,7 +75,13 @@ async fn main() -> anyhow::Result<()> {
 /// Assemble le routeur. `db = None` → recherche in-memory (dev/tests).
 /// `web_dir = Some(dir)` → sert le front WASM bâti (trunk `dist/`) en statique, avec
 /// repli SPA sur `index.html` ; le binaire unique sert alors l'UI **et** l'API (beta web).
-pub fn build_router(db: Option<atlas_db::Db>, web_dir: Option<&str>) -> Router {
+/// `auth` = authentificateur de périmètre de l'API `/v1` (AT-001), appliqué à toutes les
+/// routes `/v1` via une couche `Extension`.
+pub fn build_router(
+    db: Option<atlas_db::Db>,
+    web_dir: Option<&str>,
+    auth: Arc<dyn atlas_search::apiauth::ApiAuthenticator>,
+) -> Router {
     // M1 : encodeur factice déterministe, partagé recherche + ingestion.
     // Remplacé par SigLIP (ort/Candle) en conservant le trait Embedder → aucun changement aval.
     let embedder: Arc<dyn atlas_embed::Embedder> = Arc::new(atlas_embed::FakeEmbedder);
@@ -139,6 +160,9 @@ pub fn build_router(db: Option<atlas_db::Db>, web_dir: Option<&str>) -> Router {
     if let Some(ingest) = ingest_routes {
         v1 = v1.merge(ingest);
     }
+    // Auth de périmètre (AT-001) : l'authentificateur est injecté dans chaque requête /v1 ;
+    // l'extracteur `Identity` des handlers le récupère et exige une identité valide (401 sinon).
+    let v1 = v1.layer(atlas_search::auth_layer(auth));
 
     let mut app = Router::new().merge(system).nest("/v1", v1);
 
@@ -200,9 +224,14 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
+    /// Authentificateur de dev (en-têtes) pour les tests qui n'exercent pas l'auth par clé.
+    fn dev_auth() -> Arc<dyn atlas_search::apiauth::ApiAuthenticator> {
+        atlas_search::apiauth::build_authenticator(None).0
+    }
+
     #[tokio::test]
     async fn healthz_ok_without_db() {
-        let app = build_router(None, None);
+        let app = build_router(None, None, dev_auth());
         let res = app
             .oneshot(
                 Request::builder()
@@ -217,7 +246,8 @@ mod tests {
 
     #[tokio::test]
     async fn search_route_mounted() {
-        let app = build_router(None, None);
+        // Mode dev (aucune clé) : /v1/search sans auth répond 200 (mono-tenant local).
+        let app = build_router(None, None, dev_auth());
         let res = app
             .oneshot(
                 Request::builder()
@@ -232,6 +262,58 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
     }
 
+    /// AT-001 — preuve de bout en bout : quand des clés d'API sont configurées, l'API `/v1`
+    /// **exige** une clé valide. Sans `Authorization` → 401 ; mauvaise clé → 401 ; clé valide
+    /// → 200. Les en-têtes de confiance ne suffisent plus (identité non falsifiable).
+    #[tokio::test]
+    async fn v1_requires_valid_api_key_when_configured() {
+        let tenant = "66666666-6666-6666-6666-666666666666";
+        let (auth, n) =
+            atlas_search::apiauth::build_authenticator(Some(&format!("clef-de-test:{tenant}")));
+        assert_eq!(n, 1);
+        let app = build_router(None, None, auth);
+
+        let search = |bearer: Option<&str>| {
+            let mut b = Request::builder()
+                .method("POST")
+                .uri("/v1/search")
+                .header("content-type", "application/json");
+            if let Some(t) = bearer {
+                b = b.header("authorization", format!("Bearer {t}"));
+            }
+            b.body(Body::from(r#"{"query":"mer","page_size":5}"#))
+                .unwrap()
+        };
+
+        // Pas de clé → 401.
+        let res = app.clone().oneshot(search(None)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // Mauvaise clé → 401.
+        let res = app.clone().oneshot(search(Some("mauvaise"))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // En-tête de confiance seul (sans clé) → 401 : l'identité n'est plus falsifiable.
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/search")
+                    .header("content-type", "application/json")
+                    .header("x-atlas-tenant", tenant)
+                    .body(Body::from(r#"{"query":"mer","page_size":5}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // Clé valide → 200.
+        let res = app.oneshot(search(Some("clef-de-test"))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
     /// Beta web : avec `web_dir`, le binaire sert le front statique. On crée un `dist/`
     /// temporaire (index.html) et on vérifie qu'il est servi à la racine ET qu'une route
     /// SPA inconnue retombe sur `index.html` (routage côté client), tout en laissant l'API
@@ -243,7 +325,7 @@ mod tests {
         let marker = "<!doctype html><title>Atlas DAM test</title>";
         std::fs::write(dir.join("index.html"), marker).unwrap();
 
-        let app = build_router(None, Some(dir.to_str().unwrap()));
+        let app = build_router(None, Some(dir.to_str().unwrap()), dev_auth());
 
         // Racine → index.html.
         let res = app

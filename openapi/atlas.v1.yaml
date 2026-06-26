@@ -10,6 +10,10 @@ info:
     name: Apache-2.0
 servers:
   - url: /v1
+# Auth de périmètre par défaut sur l'API métier (AT-001) : clé d'API Bearer.
+# Les routes système (/healthz, /readyz, /version, /openapi.json) sont hors /v1 et publiques.
+security:
+  - bearerAuth: []
 tags:
   - name: system
   - name: assets
@@ -230,6 +234,16 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Authentification de périmètre par clé d'API (AT-001) : en-tête
+        `Authorization: Bearer <clé>`. La clé résout une identité tenant **non
+        falsifiable** ; clé absente/inconnue → 401. En mode dev/air-gap (aucune clé
+        configurée côté serveur), l'identité provient des en-têtes `x-atlas-tenant`/
+        `x-atlas-user` (mono-tenant local uniquement, jamais en production).
   responses:
     Problem:
       description: Erreur (RFC 9457)
