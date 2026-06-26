@@ -80,6 +80,53 @@
       .badge.ok { border-color: #2e5a36; background: #14241a; color: #8fe0a3; }
       .badge.warn { border-color: #5a3a2e; background: #241a14; color: #e8b08f; }
 
+      /* Barre de filtres explicites actifs (facettes cliquées) */
+      .active-filters {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+        margin: 0 2px 16px; padding: 10px 14px; border-radius: 10px;
+        border: 1px solid var(--accent); background: #122530;
+      }
+      .af-label {
+        text-transform: uppercase; letter-spacing: .04em; font-size: 11px;
+        font-weight: 600; color: var(--accent);
+      }
+      .af-chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 3px 10px; border-radius: 999px; font-size: 13px; cursor: pointer;
+        border: 1px solid #2e5a6e; background: #14323f; color: var(--txt);
+      }
+      .af-chip:hover { border-color: var(--accent); }
+      .af-x { color: var(--dim); font-weight: 700; }
+      .af-clear {
+        margin-left: auto; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+        cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--dim);
+      }
+      .af-clear:hover { color: var(--txt); border-color: var(--dim); }
+
+      /* Facettes (agrégations par dimension, doc 25 §4.5) */
+      .facets {
+        display: flex; flex-direction: column; gap: 10px;
+        margin: 0 2px 18px; padding: 12px 14px; border-radius: 10px;
+        border: 1px solid var(--line); background: var(--panel);
+      }
+      .facet { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+      .facet-name {
+        text-transform: uppercase; letter-spacing: .04em; font-size: 11px;
+        font-weight: 600; color: var(--dim); min-width: 96px;
+      }
+      .facet-vals { display: flex; flex-wrap: wrap; gap: 6px; }
+      .facet-val {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 2px 9px; border-radius: 999px; font-size: 12px;
+        border: 1px solid var(--line); background: #1f2530; color: var(--txt);
+      }
+      button.facet-val { cursor: pointer; }
+      button.facet-val:hover { border-color: var(--accent); }
+      .facet-val.active { border-color: var(--accent); background: #14323f; color: var(--accent); }
+      .facet-val.ro { color: var(--dim); }
+      .fc { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+      .facet-val.active .fc { color: var(--accent); }
+
       /* État vide */
       .empty { color: var(--dim); margin: 14px 2px; }
     </style>
