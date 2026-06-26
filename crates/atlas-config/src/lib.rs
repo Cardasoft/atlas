@@ -15,6 +15,11 @@ pub struct Config {
     /// `None` → API seule (le front est servi par `trunk serve` en dev). Beta web :
     /// pointer sur le `dist/` pour qu'un binaire unique serve l'UI **et** l'API.
     pub web_dir: Option<String>,
+    /// Clés d'API de périmètre (AT-001), brutes : `clé:tenant_uuid[:user_uuid]` séparées par
+    /// des virgules / retours ligne. `None`/vide → mode **dev** (en-têtes de confiance,
+    /// identité falsifiable) ; sinon auth par clé **requise** (identité non falsifiable). Le
+    /// secret n'est jamais loggé ; le parsing/hachage vit dans `atlas_search::apiauth`.
+    pub api_keys: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +53,10 @@ impl Config {
             },
             // Servir le front statique uniquement si la variable est définie (vide → ignorée).
             web_dir: env::var("ATLAS_WEB_DIR").ok().filter(|s| !s.is_empty()),
+            // Clés d'API de périmètre : définies → auth par clé ; absentes/vides → dev.
+            api_keys: env::var("ATLAS_API_KEYS")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         })
     }
 }
