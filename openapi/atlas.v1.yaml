@@ -203,10 +203,17 @@ paths:
     post:
       tags: [assets]
       operationId: createAsset
-      summary: "Ingérer un asset (M1 : métadonnées + texte ; binaire média ensuite)"
+      summary: "Ingérer un asset : upload de fichier binaire réel (multipart, AT-004) ou métadonnées+texte (JSON, M1)"
+      description: >-
+        Deux contrats acceptés. **`multipart/form-data`** (AT-004, geste DAM n°1) : la
+        partie `file` porte les **octets binaires réels** ; l'empreinte `content_sha256`
+        et la détection de provenance C2PA/IPTC (AI Act art. 50) portent sur ces octets.
+        **`application/json`** (compat M1) : empreinte calculée sur le champ `text`.
       requestBody:
         required: true
         content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/CreateAssetMultipart" }
           application/json:
             schema: { $ref: "#/components/schemas/CreateAssetRequest" }
       responses:
@@ -215,6 +222,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreateAssetResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
   /assets/{id}:
     get:
@@ -301,6 +310,36 @@ components:
           description: >-
             Origine IA déclarée par l'éditeur (human | ai_generated | ai_edited).
             Prime sur la détection par marqueurs C2PA/IPTC (AI Act art. 50).
+        generator:
+          type: string
+          nullable: true
+          description: "Outil/modèle générateur déclaré, si connu"
+    CreateAssetMultipart:
+      type: object
+      description: >-
+        Upload `multipart/form-data` (AT-004). La partie `file` est binaire (l'octet brut
+        de l'image) ; les autres parties sont des champs texte. MIME retenu = champ `mime`
+        explicite, sinon `Content-Type` de la partie fichier, sinon `application/octet-stream`.
+        Titre absent → repli sur le nom de fichier.
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: "Octets binaires réels du fichier (image…) — base de content_sha256 et de la détection C2PA"
+        title:
+          type: string
+          description: "Titre de l'asset (à défaut, le nom de fichier est utilisé)"
+        text:
+          type: string
+          description: "Texte associé à indexer (description/OCR/transcription)"
+        mime:
+          type: string
+          description: "Type MIME explicite (sinon hérité de la partie fichier)"
+        provenance:
+          type: string
+          nullable: true
+          description: "Origine IA déclarée (human | ai_generated | ai_edited), AI Act art. 50"
         generator:
           type: string
           nullable: true

@@ -29,7 +29,7 @@ authors = ["Atlas DAM"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "ws", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
